@@ -21,11 +21,13 @@ goal, not incidental development mechanics.
 
 ## Current State
 
+- Research target:
+  surpass published state-of-the-art on at least one real, literature-aligned
+  benchmark under matching local-compute assumptions. Fixture wins are only
+  development signals.
 - `main` is pushed to GitHub.
-- Latest pushed commits:
-  - `6ae67e6` `Document local-only research constraints`
-  - `7398311` `Add lightweight CI regression workflow`
-  - `54933d8` `Improve sequence experiments and reporting`
+- Latest pushed commit before the current working round:
+  - `1deb2c1` `Align benchmark reporting with literature`
 - The repo contains a runnable PyTorch experiment harness for all 8 paper
   experiments using tiny generated fixtures.
 - Runnable methods:
@@ -37,6 +39,7 @@ goal, not incidental development mechanics.
   - `irm`
   - `jtt`
   - `adversarial_probe`
+  - `counterfactual_adversarial`
   - `counterfactual_augmentation`
 - Sequence fixtures now use integer tokens, an embedding-pooling classifier,
   and token-specific counterfactual augmentation.
@@ -51,6 +54,9 @@ goal, not incidental development mechanics.
   are implemented for small local models.
 - Adversarial probe training is implemented. It is promising on Waterbirds-style
   fixtures but currently ineffective on text-toy.
+- Counterfactual adversarial training is implemented. It combines nuisance
+  counterfactual augmentation, factual/counterfactual consistency, and
+  gradient-reversal environment suppression.
 - Adapter stubs still intentionally remain for heavier methods:
   causal probes, beta-VAE/iVAE, CITRIS, CSML, and DeepIV.
 - Core commands:
@@ -77,17 +83,15 @@ goal, not incidental development mechanics.
 
 ## Near-Term Plan
 
-1. Start filling one adapter stub with a concrete causal probing baseline.
-   - Train a probe on learned hidden representations for fixture concepts.
-   - Add completeness/selectivity metrics where fixture metadata supports it.
-   - Keep the probe small and local; no external model APIs.
-2. Develop factor/token-specific probe interventions.
+1. Get a real Waterbirds-compatible feature run.
+   - Use local features, real splits, labels, and group/background metadata.
+   - Compare WGA against literature references in `docs/literature-context.md`.
+2. Compose the strongest local mechanisms.
+   - Tune counterfactual adversarial training against JTT and group-balanced
+     ERM before claiming progress.
+3. Develop factor/token-specific probe interventions.
    - Generic adversarial hiding is too blunt for sequence fixtures.
    - Use known factor/token metadata to design targeted intervention losses.
-3. Use or generate local Waterbirds-compatible features and run the real
-   benchmark adapter.
-   - Only compare to literature once the CSV uses real Waterbirds splits and
-     documented feature/backbone assumptions.
 4. Use group-balanced ERM as a required comparator for any known-group result.
 5. For every serious result, compare against literature reference/SOTA numbers
    and cite the source; update `docs/literature-context.md` as needed.

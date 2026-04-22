@@ -98,3 +98,16 @@ issues unless they invalidate an experimental result.
     regularizers; pooled representation adversarial training is too blunt.
   - Action: keep `adversarial_probe` as a promising image/tabular-style method,
     but develop factor/token-specific probe interventions next.
+
+- **Fixture-level ceiling as evidence of SOTA**
+  - Attempt: compose counterfactual augmentation with adversarial probe training
+    and evaluate first on the Waterbirds-style fixture.
+  - Result: the new `counterfactual_adversarial` method reached WGA/accuracy
+    1.0 and improved probe selectivity, but the fixture is too small and too
+    synthetic to support a literature claim.
+  - Interpretation: reaching the fixture ceiling is useful as a regression and
+    mechanism check, but it does not establish progress over published
+    Waterbirds results.
+  - Action: treat this as a candidate method, not a result claim. Move next to
+    the real local feature-table adapter and compare against published WGA under
+    matching assumptions.

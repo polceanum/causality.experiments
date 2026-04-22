@@ -16,6 +16,16 @@ iteration, but they are not directly comparable to published benchmark numbers.
 - Before making a serious claim, refresh this file with current papers or
   benchmark tables and cite sources.
 
+## SOTA Target
+
+- The project goal is to surpass published SOTA on at least one real benchmark,
+  not on tiny fixtures.
+- Initial target: Waterbirds worst-group accuracy, because it has clear
+  published references and the repo now has a local feature-table adapter path.
+- Current reference best recorded here: DFR around `92.9` WGA and `94.2`
+  average accuracy on real Waterbirds. This should be refreshed before any
+  serious claim.
+
 ## Waterbirds / Spurious Correlation Robustness
 
 The repo currently has `05_waterbirds`, a tiny Waterbirds-style fixture. It is

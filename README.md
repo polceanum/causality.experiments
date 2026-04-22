@@ -81,8 +81,9 @@ conda run -n orpheus python -m causality_experiments run \
   mirrors for all 8 experiments described in the source document.
 - `causality_experiments.methods` provides runnable `constant`, `oracle`,
   `erm`, `group_balanced_erm`, `group_dro`, `irm`, `jtt`,
-  `adversarial_probe`, and `counterfactual_augmentation` baselines plus adapter
-  contracts for causal probes, β-VAE/iVAE/CITRIS/CSML/DeepIV.
+  `adversarial_probe`, `counterfactual_adversarial`, and
+  `counterfactual_augmentation` baselines plus adapter contracts for causal
+  probes, β-VAE/iVAE/CITRIS/CSML/DeepIV.
 - `causality_experiments.metrics` records accuracy, worst-group accuracy,
   support recovery, and an ATE-style proxy where ground truth supports it.
 - `configs/experiments` contains one runnable fixture config per experiment.

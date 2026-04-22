@@ -72,7 +72,13 @@ def test_irm_runs() -> None:
 
 
 def test_group_robust_baselines_run() -> None:
-    for method in ("group_balanced_erm", "group_dro", "jtt", "adversarial_probe"):
+    for method in (
+        "group_balanced_erm",
+        "group_dro",
+        "jtt",
+        "adversarial_probe",
+        "counterfactual_adversarial",
+    ):
         config = {
             "seed": 3,
             "dataset": {"kind": "synthetic_linear", "n": 120},

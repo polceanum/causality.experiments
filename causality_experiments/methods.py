@@ -424,6 +424,77 @@ def fit_adversarial_probe(bundle: DatasetBundle, config: dict[str, Any]) -> Torc
     return TorchClassifier(model, device)
 
 
+def _counterfactual_batch(bundle: DatasetBundle, xb: torch.Tensor) -> torch.Tensor:
+    if bundle.causal_mask is None:
+        raise ValueError("Counterfactual batch construction requires dataset.causal_mask.")
+    device = xb.device
+    perm = torch.randperm(len(xb), device=device)
+    if _is_sequence(bundle):
+        x_cf = xb.clone()
+        conf_pos = int((bundle.metadata or {}).get("confounder_position", -1))
+        if conf_pos >= 0:
+            x_cf[:, conf_pos] = xb[perm, conf_pos]
+            return x_cf
+    causal_mask = bundle.causal_mask.to(device)
+    nuisance_mask = 1.0 - causal_mask
+    return xb * causal_mask + xb[perm] * nuisance_mask
+
+
+def fit_counterfactual_adversarial(bundle: DatasetBundle, config: dict[str, Any]) -> TorchClassifier:
+    if bundle.causal_mask is None:
+        raise ValueError("Counterfactual adversarial training requires dataset.causal_mask.")
+    method = dict(config.get("method", {}))
+    training = dict(config.get("training", {}))
+    seed = int(config.get("seed", 0))
+    torch.manual_seed(seed)
+    device = _device(str(training.get("device", "auto")))
+    model = _make_model(bundle, method).to(device)
+    train = bundle.split("train")
+    dataset = TensorDataset(train["x"], train["y"], train["env"])
+    loader = DataLoader(
+        dataset,
+        batch_size=int(training.get("batch_size", 64)),
+        shuffle=True,
+        generator=torch.Generator().manual_seed(seed),
+    )
+    env_dim = int(train["env"].max().item()) + 1
+    repr_dim = int(model.encode(train["x"][:1].to(device)).shape[1])
+    nuisance_head = nn.Linear(repr_dim, env_dim).to(device)
+    opt = torch.optim.Adam(
+        list(model.parameters()) + list(nuisance_head.parameters()),
+        lr=float(training.get("lr", 1e-3)),
+        weight_decay=float(training.get("weight_decay", 0.0)),
+    )
+    epochs = int(training.get("epochs", 30))
+    adv_weight = float(method.get("adv_weight", 0.05))
+    consistency_weight = float(method.get("consistency_weight", 0.2))
+    clip_grad = float(training.get("clip_grad", 1.0))
+    for _ in range(epochs):
+        model.train()
+        nuisance_head.train()
+        for xb, yb, envb in loader:
+            xb = xb.to(device)
+            yb = yb.to(device)
+            envb = envb.to(device)
+            x_cf = _counterfactual_batch(bundle, xb)
+            opt.zero_grad(set_to_none=True)
+            logits = model(xb)
+            cf_logits = model(x_cf)
+            z = model.encode(xb)
+            label_loss = F.cross_entropy(logits, yb) + F.cross_entropy(cf_logits, yb)
+            consistency = F.mse_loss(F.softmax(logits, dim=1), F.softmax(cf_logits, dim=1))
+            nuisance_loss = F.cross_entropy(nuisance_head(_grad_reverse(z, adv_weight)), envb)
+            loss = label_loss + consistency_weight * consistency + nuisance_loss
+            loss.backward()
+            if clip_grad > 0:
+                nn.utils.clip_grad_norm_(
+                    list(model.parameters()) + list(nuisance_head.parameters()),
+                    clip_grad,
+                )
+            opt.step()
+    return TorchClassifier(model, device)
+
+
 def fit_counterfactual_augmentation(bundle: DatasetBundle, config: dict[str, Any]) -> TorchClassifier:
     if bundle.causal_mask is None:
         raise ValueError("Counterfactual augmentation requires dataset.causal_mask.")
@@ -456,16 +527,7 @@ def fit_counterfactual_augmentation(bundle: DatasetBundle, config: dict[str, Any
         for xb, yb in loader:
             xb = xb.to(device)
             yb = yb.to(device)
-            perm = torch.randperm(len(xb), device=device)
-            if _is_sequence(bundle):
-                x_cf = xb.clone()
-                conf_pos = int((bundle.metadata or {}).get("confounder_position", -1))
-                if conf_pos >= 0:
-                    x_cf[:, conf_pos] = xb[perm, conf_pos]
-                else:
-                    x_cf = xb * causal_mask + xb[perm] * nuisance_mask
-            else:
-                x_cf = xb * causal_mask + xb[perm] * nuisance_mask
+            x_cf = _counterfactual_batch(bundle, xb)
             opt.zero_grad(set_to_none=True)
             logits = model(xb)
             cf_logits = model(x_cf)
@@ -544,6 +606,7 @@ METHODS = {
     "irm": fit_irm,
     "jtt": fit_jtt,
     "adversarial_probe": fit_adversarial_probe,
+    "counterfactual_adversarial": fit_counterfactual_adversarial,
     "counterfactual_augmentation": fit_counterfactual_augmentation,
     "causal_probe": fit_adapter_only,
     "beta_vae": fit_adapter_only,

@@ -15,6 +15,7 @@ def _experiment_name(run: str) -> str:
     base = run
     for suffix in (
         "_counterfactual_augmentation",
+        "_counterfactual_adversarial",
         "_adversarial_probe",
         "_group_balanced_erm",
         "_group_dro",
@@ -45,11 +46,17 @@ def main() -> None:
             "irm",
             "jtt",
             "adversarial_probe",
+            "counterfactual_adversarial",
             "counterfactual_augmentation",
         }:
             continue
         config_name = row.get("config") or row["run"]
-        if "_irm_w" in config_name or "_seed" in config_name:
+        if (
+            "_irm_w" in config_name
+            or "_seed" in config_name
+            or "_w0p" in config_name
+            or "_w1p" in config_name
+        ):
             continue
         grouped.setdefault(_experiment_name(config_name), []).append(row)
     for experiment, items in sorted(grouped.items()):

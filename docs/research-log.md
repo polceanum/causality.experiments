@@ -207,3 +207,34 @@ signals. Keep this focused on what was tried and what was learned.
 - Added a local Waterbirds feature-table adapter and config template as the
   first path toward a real literature-aligned benchmark run without cloud/API
   dependencies.
+
+## 2026-04-22: SOTA Target
+
+- Set the explicit research target:
+  surpass published SOTA on at least one real, literature-aligned benchmark
+  under matching assumptions and local compute constraints.
+- Initial practical target:
+  Waterbirds WGA, using local feature-table inputs and comparing against
+  published Waterbirds references.
+- Guardrail:
+  fixture performance, even when very high, is not evidence of SOTA.
+
+## 2026-04-22: Counterfactual Adversarial Composition
+
+- Added `counterfactual_adversarial`, a local method that combines:
+  counterfactual nuisance augmentation, factual/counterfactual prediction
+  consistency, and gradient-reversal environment suppression.
+- Focused Waterbirds-style fixture result:
+  `counterfactual_adversarial` reached WGA/accuracy 1.0, matching JTT and
+  adversarial probe on this easy fixture.
+- Probe diagnostic on the same fixture:
+  `counterfactual_adversarial` reached causal probe accuracy 1.0, nuisance
+  probe accuracy about 0.869, and selectivity about 0.131. This is better
+  selectivity than plain adversarial probe in the latest local run, but it is
+  still only a fixture result.
+- Interpretation:
+  composing counterfactual augmentation with adversarial suppression is a
+  plausible SOTA-seeking direction, but the current evidence is development
+  signal only. The next decisive step is to run the same method on a real
+  Waterbirds-compatible local feature table and compare against published WGA
+  references.
