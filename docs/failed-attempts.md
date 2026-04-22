@@ -1,33 +1,51 @@
-# Failed Attempts Log
+# Failed Research Attempts Log
 
-Record dead ends, bugs, bad assumptions, and debugging notes so future work does
-not quietly repeat them.
+Record research attempts that were weak, misleading, or empirically failed.
+Do not use this file for incidental tooling, git, environment, or debugging
+issues unless they invalidate an experimental result.
 
 ## 2026-04-22
 
-- `pdftotext` was not installed locally.
-  - Resolution: used `pypdf`, which was already available in `orpheus`.
-- Running `python scripts/run_all_fixtures.py` initially failed with
-  `ModuleNotFoundError: No module named 'causality_experiments'`.
-  - Cause: direct script execution put `scripts/` on `sys.path`, not the repo
-    root.
-  - Resolution: scripts now insert the repo root into `sys.path`.
-- Attempted to create a branch named `codex/causal-experiments-harness`.
-  - Failure: git could not create the nested ref path.
-  - Resolution: user later clarified direct pushes to `main` are acceptable.
-- First `git push` failed with `Could not resolve hostname github.com`.
-  - Cause: sandboxed network restriction.
-  - Resolution: reran with approved `git push` escalation.
-- `gh auth status` reported an invalid GitHub token for user `polceanum`.
-  - Impact: skipped GitHub CLI PR flow.
-  - Resolution: used direct git SSH push to `main`.
-- Initial IRM sweep used `penalty_weight=50.0`.
-  - Failure mode: many runs collapsed to poor worst-group accuracy and low
-    average accuracy.
-  - Resolution: quick tuning on synthetic linear and Waterbirds-style fixtures
-    showed lower penalties are safer; sweep default changed to `1.0`.
-- The first version of `scripts/report_best_methods.py` grouped runs by parsing
-  timestamped run directory names.
-  - Failure mode: noisy grouping and ad hoc tuning runs polluted the report.
-  - Resolution: `summary.csv` now includes the config name, and the report skips
-    `_irm_w...` ad hoc tuning configs.
+- **Over-regularized IRM as a general robust baseline**
+  - Attempt: run IRM across all 8 fixture experiments with
+    `penalty_weight=50.0`.
+  - Result: many runs collapsed, with poor average accuracy and near-zero
+    worst-group accuracy on several tasks.
+  - Interpretation: the current IRM implementation is highly penalty-sensitive;
+    a large invariant penalty can dominate the label objective instead of
+    encouraging causal features.
+  - Action: changed the sweep default to `penalty_weight=1.0` and longer
+    training. Treat IRM as a tuned baseline, not a reliable default.
+
+- **Plain MLP treatment for token/NER-style fixtures**
+  - Attempt: represent token sequences as normalized float vectors and train the
+    same MLP used for tabular fixtures.
+  - Result: `07_text_toy` remains best under ERM with weak worst-group accuracy,
+    and `08_fewshot_ner` only shows a small IRM improvement.
+  - Interpretation: this setup under-models sequence structure and does not
+    provide a meaningful test of causal language interventions.
+  - Action: replace with an embedding-based sequence model and token-specific
+    counterfactual augmentation before drawing research conclusions from these
+    tasks.
+
+- **Naive counterfactual augmentation on factor fixtures**
+  - Attempt: preserve causal dimensions and randomly swap nuisance dimensions
+    within a batch for all datasets with a causal mask.
+  - Result: strong gains on clean spurious-feature tasks, but weak gains on
+    `03_dsprites_3dshapes` and mixed or negative effects on `04_causal3dident`
+    and `07_text_toy`.
+  - Interpretation: mask-based nuisance swapping is too crude for structured
+    factor or sequence settings. It works when the causal/nuisance split is
+    simple and independent, but can generate invalid or uninformative
+    counterfactuals elsewhere.
+  - Action: add dataset-specific intervention policies rather than using one
+    augmentation rule everywhere.
+
+- **ATE proxy as a causal-effect metric**
+  - Attempt: estimate an ATE-style diagnostic by forcing one causal feature from
+    0 to 1 and measuring prediction change.
+  - Result: useful as a smoke-test diagnostic, but values are hard to interpret
+    across normalized token, factor, and tabular fixtures.
+  - Interpretation: the metric is not yet a reliable causal-effect estimator.
+  - Action: keep it labeled as a proxy; add task-specific effect metrics before
+    reporting causal-effect claims.

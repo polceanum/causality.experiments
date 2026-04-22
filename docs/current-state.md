@@ -1,7 +1,8 @@
 # Current State and Plan
 
-This is the handoff/state file. Update it after meaningful implementation or
-experiment rounds.
+This is the research handoff/state file. Update it after meaningful
+implementation or experiment rounds. Keep it focused on the causal-extraction
+goal, not incidental development mechanics.
 
 ## Current State
 
@@ -9,7 +10,7 @@ experiment rounds.
 - Latest pushed commits:
   - `f36eb63` `Implement causal experiment harness`
   - `3d171d7` `Add causal method sweeps`
-- Worktree was clean before these docs were added.
+  - `20f547c` `Add experiment tracking logs`
 - The repo contains a runnable PyTorch experiment harness for all 8 paper
   experiments using tiny generated fixtures.
 - Runnable methods:
@@ -54,3 +55,11 @@ experiment rounds.
 - IRM remains sensitive to penalty schedules and may need config sweeps per
   dataset.
 - ATE proxy is a rough diagnostic, not a validated causal-effect estimator.
+
+## Log Hygiene
+
+- `docs/research-log.md` should track research progress and empirical signals.
+- `docs/failed-attempts.md` should track failed or weak research/modeling
+  attempts, not tooling friction.
+- `docs/current-state.md` should stay as a compact handoff: current capability,
+  next plan, risks, and active assumptions.

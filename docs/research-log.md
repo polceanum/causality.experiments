@@ -6,13 +6,12 @@ signals. Keep this focused on what was tried and what was learned.
 ## 2026-04-22
 
 - Read the source document, which is a survey and experiment blueprint rather
-  than a single fully specified algorithm.
+  than a single fully specified algorithm. The practical research direction is
+  to compare counterfactual interventions, invariance penalties, probing, and
+  meta-causal generalization under shared evaluation scaffolding.
 - Chose a dataset-driven harness as the first implementation target:
   all 8 paper experiments are represented by runnable tiny fixtures, with
   adapter boundaries for real benchmark data.
-- Confirmed the `orpheus` conda environment already includes the needed core
-  packages: Python 3.10, PyTorch 2.10, NumPy, pandas, matplotlib, Typer, YAML,
-  tqdm, and pytest. No pip installs were used.
 - Implemented the first runnable harness:
   dataset adapters, configs, method interface, metrics, CLI, fixture generation,
   and batch runs.
@@ -45,3 +44,8 @@ signals. Keep this focused on what was tried and what was learned.
 - Interpretation:
   the current tabular treatment is enough to test spurious-feature robustness,
   but sequence/text fixtures need a real sequence model and intervention logic.
+- Research conclusion so far:
+  explicit counterfactual nuisance randomization is the strongest initial
+  approach for simple spurious-correlation tasks, while invariance-only training
+  needs careful penalty tuning and task-specific validation. The next research
+  bottleneck is making interventions semantically valid for structured data.
