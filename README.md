@@ -43,3 +43,9 @@ conda run -n orpheus python -m causality_experiments summarize --runs outputs/ru
 The heavier causal methods are intentionally explicit adapter stubs in this
 first pass. They can be implemented behind the same fit/predict interface
 without changing datasets, metrics, or run outputs.
+
+## Project logs
+
+- [Research log](docs/research-log.md)
+- [Failed attempts log](docs/failed-attempts.md)
+- [Current state and plan](docs/current-state.md)
