@@ -1,4 +1,8 @@
 name: 01_synthetic_linear
+benchmark:
+  kind: synthetic_fixture
+  id: synthetic_linear
+  comparable_to_literature: false
 seed: 11
 dataset:
   kind: synthetic_linear

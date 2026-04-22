@@ -1,4 +1,8 @@
 name: 07_text_toy
+benchmark:
+  kind: synthetic_fixture
+  id: text_toy
+  comparable_to_literature: false
 seed: 17
 dataset:
   kind: text_toy

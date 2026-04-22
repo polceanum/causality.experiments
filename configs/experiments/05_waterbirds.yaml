@@ -1,4 +1,10 @@
 name: 05_waterbirds
+benchmark:
+  kind: fixture
+  id: waterbirds
+  comparable_to_literature: false
+  aligned_real_benchmarks:
+    - waterbirds
 seed: 15
 dataset:
   kind: waterbirds_tiny

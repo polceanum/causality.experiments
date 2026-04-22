@@ -36,3 +36,27 @@ def test_sequence_fixture_preserves_integer_tokens() -> None:
     assert bundle.metadata["modality"] == "sequence"
     assert float(x.max()) > 1.0
     assert bool((x == x.long().float()).all())
+
+
+def test_waterbirds_feature_adapter_loads_local_csv(tmp_path) -> None:
+    csv_path = tmp_path / "features.csv"
+    csv_path.write_text(
+        "\n".join(
+            [
+                "split,y,place,feature_0,feature_1",
+                "train,0,0,0.0,1.0",
+                "train,1,1,1.0,0.0",
+                "val,0,1,0.2,0.8",
+                "val,1,0,0.8,0.2",
+                "test,0,0,0.1,0.9",
+                "test,1,1,0.9,0.1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    bundle = load_dataset({"dataset": {"kind": "waterbirds_features", "path": str(csv_path)}})
+    assert bundle.name == "waterbirds_features"
+    assert bundle.input_dim == 2
+    assert bundle.metadata is not None
+    assert bundle.metadata["fixture"] is False
+    assert bundle.split("train")["group"].tolist() == [0, 3]

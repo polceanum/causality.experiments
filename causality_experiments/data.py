@@ -182,6 +182,82 @@ def _local_dataset(config: dict[str, Any]) -> DatasetBundle:
     )
 
 
+def _first_existing(columns: set[str], candidates: tuple[str, ...], context: str) -> str:
+    for candidate in candidates:
+        if candidate in columns:
+            return candidate
+    joined = ", ".join(candidates)
+    raise ValueError(f"{context} requires one of these columns: {joined}")
+
+
+def _waterbirds_features(config: dict[str, Any]) -> DatasetBundle:
+    import pandas as pd
+
+    path = Path(str(config.get("path", ""))).expanduser()
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Waterbirds feature table {path} does not exist. Provide a local CSV with "
+            "split, label, place/background, and feature columns."
+        )
+    frame = pd.read_csv(path)
+    columns = set(frame.columns)
+    split_col = _first_existing(columns, ("split", "fold"), "Waterbirds feature adapter")
+    label_col = _first_existing(columns, ("y", "label", "target", "bird_label"), "Waterbirds feature adapter")
+    env_col = _first_existing(columns, ("place", "background", "env", "spurious"), "Waterbirds feature adapter")
+    group_col = next((col for col in ("group", "group_id") if col in columns), None)
+    feature_cols = [
+        col
+        for col in frame.columns
+        if col.startswith("feature_") or col.startswith("x")
+    ]
+    if not feature_cols:
+        ignored = {split_col, label_col, env_col}
+        if group_col is not None:
+            ignored.add(group_col)
+        feature_cols = [
+            col
+            for col in frame.columns
+            if col not in ignored and pd.api.types.is_numeric_dtype(frame[col])
+        ]
+    if not feature_cols:
+        raise ValueError("Waterbirds feature adapter could not infer any numeric feature columns.")
+
+    splits: dict[str, dict[str, torch.Tensor]] = {}
+    for split_name in ("train", "val", "test"):
+        part = frame[frame[split_col].astype(str).str.lower() == split_name]
+        if part.empty:
+            raise ValueError(f"Waterbirds feature table has no rows for split {split_name!r}.")
+        y = part[label_col].astype(int).to_numpy()
+        env = part[env_col].astype(int).to_numpy()
+        if group_col is None:
+            group = env * 2 + y
+        else:
+            group = part[group_col].astype(int).to_numpy()
+        splits[split_name] = {
+            "x": torch.tensor(part[feature_cols].to_numpy(dtype=np.float32), dtype=torch.float32),
+            "y": torch.tensor(y, dtype=torch.long),
+            "env": torch.tensor(env, dtype=torch.long),
+            "group": torch.tensor(group, dtype=torch.long),
+        }
+    return DatasetBundle(
+        name="waterbirds_features",
+        task="classification",
+        splits=splits,
+        input_dim=len(feature_cols),
+        output_dim=int(frame[label_col].max()) + 1,
+        causal_mask=None,
+        metadata={
+            "fixture": False,
+            "modality": "features",
+            "source_path": str(path),
+            "feature_columns": feature_cols,
+            "label_column": label_col,
+            "environment_column": env_col,
+            "group_column": group_col,
+        },
+    )
+
+
 DATASETS: dict[str, DatasetFactory] = {
     "synthetic_linear": lambda config: _spurious_tabular(config, nonlinear=False),
     "synthetic_nonlinear": lambda config: _spurious_tabular(config, nonlinear=True),
@@ -191,6 +267,7 @@ DATASETS: dict[str, DatasetFactory] = {
     "shapes_spurious_tiny": lambda config: _factor_fixture(config, "shapes_spurious_tiny"),
     "text_toy": lambda config: _sequence_fixture(config, "text_toy"),
     "fewshot_ner_tiny": lambda config: _sequence_fixture(config, "fewshot_ner_tiny", ner=True),
+    "waterbirds_features": _waterbirds_features,
     "local": _local_dataset,
 }
 

@@ -6,10 +6,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import matplotlib.pyplot as plt
-
 from .config import load_config
 from .data import load_dataset
+from .literature import benchmark_metadata
 from .methods import fit_method
 from .metrics import evaluate
 
@@ -25,6 +24,7 @@ def run_experiment(config_path: str | Path, output_root: str | Path | None = Non
     run_dir.mkdir(parents=True, exist_ok=True)
     payload: dict[str, Any] = {
         "config": config,
+        "benchmark": benchmark_metadata(config),
         "dataset": {
             "name": bundle.name,
             "input_dim": bundle.input_dim,
@@ -44,6 +44,8 @@ def run_experiment(config_path: str | Path, output_root: str | Path | None = Non
 
 
 def _plot_metrics(metrics: dict[str, float], path: Path) -> None:
+    import matplotlib.pyplot as plt
+
     acc_items = [(k, v) for k, v in metrics.items() if k.endswith("accuracy")]
     if not acc_items:
         return
@@ -68,6 +70,11 @@ def summarize_runs(runs_dir: str | Path) -> Path:
         row = {
             "run": metrics_path.parent.name,
             "dataset": payload.get("dataset", {}).get("name", ""),
+            "benchmark_id": payload.get("benchmark", {}).get("id", ""),
+            "benchmark_kind": payload.get("benchmark", {}).get("kind", ""),
+            "literature_comparable": str(
+                payload.get("benchmark", {}).get("comparable_to_literature", False)
+            ),
             "config": config.get("name", ""),
             "method": config.get("method", {}).get("kind", ""),
         }

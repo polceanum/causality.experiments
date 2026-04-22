@@ -1,4 +1,11 @@
 name: 03_dsprites_3dshapes
+benchmark:
+  kind: fixture
+  id: dsprites_3dshapes
+  comparable_to_literature: false
+  aligned_real_benchmarks:
+    - dsprites
+    - 3dshapes
 seed: 13
 dataset:
   kind: dsprites_tiny

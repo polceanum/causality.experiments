@@ -1,4 +1,8 @@
 name: 02_synthetic_nonlinear
+benchmark:
+  kind: synthetic_fixture
+  id: synthetic_nonlinear
+  comparable_to_literature: false
 seed: 12
 dataset:
   kind: synthetic_nonlinear

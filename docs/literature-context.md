@@ -10,6 +10,9 @@ iteration, but they are not directly comparable to published benchmark numbers.
 - Tiny fixture numbers must not be described as state of the art.
 - For real benchmarks, reports should compare against published ERM, robust
   baseline, and best-known/SOTA numbers where available.
+- Configs should set `benchmark.comparable_to_literature: true` only when the
+  local data, split, model/backbone assumptions, and metric match the cited
+  benchmark closely enough to support comparison.
 - Before making a serious claim, refresh this file with current papers or
   benchmark tables and cite sources.
 

@@ -1,4 +1,8 @@
 name: 08_fewshot_ner
+benchmark:
+  kind: fixture
+  id: fewshot_ner
+  comparable_to_literature: false
 seed: 18
 dataset:
   kind: fewshot_ner_tiny

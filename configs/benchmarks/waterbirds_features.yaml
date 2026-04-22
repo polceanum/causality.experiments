@@ -1,0 +1,25 @@
+name: waterbirds_features
+benchmark:
+  kind: real
+  id: waterbirds
+  comparable_to_literature: true
+  requirements:
+    - Real Waterbirds split semantics.
+    - Metrics report test worst-group accuracy.
+    - Feature extractor/backbone assumptions are documented alongside results.
+seed: 101
+dataset:
+  kind: waterbirds_features
+  path: data/waterbirds/features.csv
+method:
+  kind: erm
+  hidden_dim: 64
+training:
+  device: cpu
+  epochs: 20
+  batch_size: 64
+  lr: 0.001
+metrics:
+  - accuracy
+  - worst_group_accuracy
+output_dir: outputs/runs

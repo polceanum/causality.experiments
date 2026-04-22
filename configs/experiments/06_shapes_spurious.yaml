@@ -1,4 +1,10 @@
 name: 06_shapes_spurious
+benchmark:
+  kind: fixture
+  id: shapes_spurious
+  comparable_to_literature: false
+  aligned_real_benchmarks:
+    - 3dshapes
 seed: 16
 dataset:
   kind: shapes_spurious_tiny

@@ -1,4 +1,10 @@
 name: 04_causal3dident
+benchmark:
+  kind: fixture
+  id: causal3dident
+  comparable_to_literature: false
+  aligned_real_benchmarks:
+    - causal3dident
 seed: 14
 dataset:
   kind: causal3d_tiny

@@ -200,3 +200,10 @@ signals. Keep this focused on what was tried and what was learned.
   comparable to published Waterbirds numbers.
 - Added `docs/literature-context.md` with initial Waterbirds/JTT context and a
   reminder to refresh sources before serious claims.
+- Added benchmark metadata to experiment configs so reports can distinguish
+  synthetic/local fixtures from real literature-comparable benchmark runs.
+- Added a benchmark-alignment report to show when a run has literature
+  references but is still only a fixture result.
+- Added a local Waterbirds feature-table adapter and config template as the
+  first path toward a real literature-aligned benchmark run without cloud/API
+  dependencies.

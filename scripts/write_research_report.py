@@ -11,6 +11,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from causality_experiments.run import summarize_runs
+from causality_experiments.literature import best_literature_wga, literature_rows
 
 
 METHODS = {
@@ -46,6 +47,19 @@ def _metric(row: dict[str, str], key: str) -> float:
         return float("nan")
 
 
+def _is_literature_comparable(row: dict[str, str]) -> bool:
+    return row.get("literature_comparable", "").lower() == "true"
+
+
+def _is_ad_hoc_config(config_name: str) -> bool:
+    return (
+        "_seed" in config_name
+        or "_irm_w" in config_name
+        or "_w0p" in config_name
+        or "_w1p" in config_name
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--runs", default="outputs/runs")
@@ -69,7 +83,7 @@ def main() -> None:
     for row in latest.values():
         method = row.get("method", "")
         config_name = row.get("config") or row.get("run", "")
-        if method not in METHODS or "_irm_w" in config_name:
+        if method not in METHODS or _is_ad_hoc_config(config_name):
             continue
         experiment = _experiment_name(config_name)
         if args.match and args.match not in experiment:
@@ -88,26 +102,62 @@ def main() -> None:
         "- For real benchmarks, refresh `docs/literature-context.md` and report published reference/SOTA numbers next to local results.",
         "- Current `05_waterbirds` is Waterbirds-style, not the real Waterbirds benchmark; its WGA is not directly comparable to published Waterbirds numbers.",
         "",
-        "| Experiment | Best Method | Test WGA | Test Acc | Support | ATE Proxy | Run |",
-        "| --- | --- | ---: | ---: | ---: | ---: | --- |",
+        "| Experiment | Benchmark | Comparable? | Best Method | Test WGA | Test Acc | Literature Best WGA | Run |",
+        "| --- | --- | --- | --- | ---: | ---: | ---: | --- |",
     ]
     for experiment, items in sorted(grouped.items()):
         best = max(items, key=lambda row: _metric(row, "test/worst_group_accuracy"))
+        benchmark_id = best.get("benchmark_id", "")
+        lit_best = best_literature_wga(benchmark_id)
         lines.append(
             "| "
             + " | ".join(
                 [
                     experiment,
+                    benchmark_id or "unknown",
+                    "yes" if _is_literature_comparable(best) else "no",
                     best.get("method", ""),
                     f"{_metric(best, 'test/worst_group_accuracy'):.3f}",
                     f"{_metric(best, 'test/accuracy'):.3f}",
-                    f"{_metric(best, 'support_recovery'):.3f}",
-                    f"{_metric(best, 'ate_proxy_error'):.3f}",
+                    "" if lit_best is None else f"{lit_best / 100.0:.3f}",
                     best.get("run", ""),
                 ]
             )
             + " |"
         )
+
+    benchmark_ids = sorted({row.get("benchmark_id", "") for rows in grouped.values() for row in rows})
+    lit_sections = [benchmark_id for benchmark_id in benchmark_ids if literature_rows(benchmark_id)]
+    if lit_sections:
+        lines.extend(["", "## Literature Reference Numbers", ""])
+        for benchmark_id in lit_sections:
+            lines.extend(
+                [
+                    f"### {benchmark_id}",
+                    "",
+                    "| Method | WGA | Avg Acc | Source | Notes |",
+                    "| --- | ---: | ---: | --- | --- |",
+                ]
+            )
+            for result in literature_rows(benchmark_id):
+                lines.append(
+                    "| "
+                    + " | ".join(
+                        [
+                            result.method,
+                            ""
+                            if result.worst_group_accuracy is None
+                            else f"{result.worst_group_accuracy / 100.0:.3f}",
+                            ""
+                            if result.average_accuracy is None
+                            else f"{result.average_accuracy / 100.0:.3f}",
+                            result.source,
+                            result.notes,
+                        ]
+                    )
+                    + " |"
+                )
+            lines.append("")
 
     lines.extend(["", "## Method Rows", ""])
     for experiment, items in sorted(grouped.items()):

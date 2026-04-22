@@ -62,6 +62,19 @@ Report causal/nuisance probe diagnostics:
 conda run -n orpheus python scripts/report_probe_diagnostics.py --match 05_waterbirds
 ```
 
+Check benchmark/literature alignment:
+
+```bash
+conda run -n orpheus python scripts/report_benchmark_alignment.py
+```
+
+Run a real-benchmark-compatible Waterbirds feature table:
+
+```bash
+conda run -n orpheus python -m causality_experiments run \
+  --config configs/benchmarks/waterbirds_features.yaml
+```
+
 ## Shape of the implementation
 
 - `causality_experiments.data` provides dataset adapters and tiny generated
@@ -84,3 +97,4 @@ without changing datasets, metrics, or run outputs.
 - [Failed attempts log](docs/failed-attempts.md)
 - [Current state and plan](docs/current-state.md)
 - [Literature context](docs/literature-context.md)
+- [Benchmark adapters](docs/benchmark-adapters.md)

@@ -62,12 +62,18 @@ goal, not incidental development mechanics.
   - `conda run -n orpheus python scripts/run_seed_sweep.py --match 07 --seeds 11,12,13`
   - `conda run -n orpheus python scripts/report_seed_sweep.py --match 07`
   - `conda run -n orpheus python scripts/report_probe_diagnostics.py --match 05_waterbirds`
+  - `conda run -n orpheus python scripts/report_benchmark_alignment.py`
+  - `conda run -n orpheus python -m causality_experiments run --config configs/benchmarks/waterbirds_features.yaml`
   - `conda run -n orpheus python -m causality_experiments summarize --runs outputs/runs`
 - GitHub Actions CI runs `pytest` plus a tiny CLI smoke test on pushes and pull
   requests.
 - Result reports should include literature context where possible. Tiny fixture
   results are not SOTA claims; real benchmark adapters are required for direct
   comparison to published numbers.
+- Experiment configs include explicit benchmark metadata marking whether a run
+  is a synthetic/local fixture or a real literature-comparable benchmark.
+- A local Waterbirds feature-table adapter is available as the first
+  literature-aligned benchmark path.
 
 ## Near-Term Plan
 
@@ -78,9 +84,10 @@ goal, not incidental development mechanics.
 2. Develop factor/token-specific probe interventions.
    - Generic adversarial hiding is too blunt for sequence fixtures.
    - Use known factor/token metadata to design targeted intervention losses.
-3. Add real-data adapter documentation.
-   - Specify expected local file formats for Waterbirds, dSprites/3DShapes,
-     Causal3DIdent, and NER before implementing dataset-specific loaders.
+3. Use or generate local Waterbirds-compatible features and run the real
+   benchmark adapter.
+   - Only compare to literature once the CSV uses real Waterbirds splits and
+     documented feature/backbone assumptions.
 4. Use group-balanced ERM as a required comparator for any known-group result.
 5. For every serious result, compare against literature reference/SOTA numbers
    and cite the source; update `docs/literature-context.md` as needed.
