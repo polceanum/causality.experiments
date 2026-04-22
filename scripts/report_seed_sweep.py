@@ -14,11 +14,23 @@ if str(ROOT) not in sys.path:
 from causality_experiments.run import summarize_runs
 
 
-METHODS = {"erm", "irm", "counterfactual_augmentation"}
+METHODS = {
+    "erm",
+    "group_balanced_erm",
+    "group_dro",
+    "irm",
+    "counterfactual_augmentation",
+}
 
 
 def _experiment_name(config_name: str) -> str:
-    for suffix in ("_counterfactual_augmentation", "_irm", "_erm"):
+    for suffix in (
+        "_counterfactual_augmentation",
+        "_group_balanced_erm",
+        "_group_dro",
+        "_irm",
+        "_erm",
+    ):
         if suffix in config_name:
             return config_name.split(suffix, 1)[0]
     return config_name

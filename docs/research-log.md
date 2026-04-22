@@ -90,3 +90,37 @@ signals. Keep this focused on what was tried and what was learned.
   large. This is not enough to claim a robust sequence method yet; it does
   justify using these fixtures as stress tests while adding stronger baselines
   and better intervention policies.
+
+## 2026-04-22: Known-Group Robust Baselines
+
+- Added local PyTorch implementations of:
+  - `group_balanced_erm`: samples minibatches with inverse group-frequency
+    weights.
+  - `group_dro`: maintains exponential weights over group losses and optimizes
+    the weighted group-risk objective.
+- Added both baselines to method sweeps, seed sweeps, reports, and regression
+  tests.
+- Focused single-run sweeps on synthetic linear, Waterbirds-style, text toy, and
+  few-shot NER fixtures.
+- Main single-run signal:
+  - Waterbirds-style: group-balanced ERM reached WGA about 0.91, while
+    counterfactual augmentation remained strongest at about 0.93.
+  - Text toy: group-balanced ERM and GroupDRO improved WGA over ERM, but with
+    lower average accuracy than ERM/counterfactual augmentation.
+  - Few-shot NER: group-balanced ERM matched counterfactual augmentation WGA but
+    trailed IRM on the focused single run.
+- Three-seed Waterbirds-style sweep:
+  - counterfactual augmentation and group-balanced ERM both reached WGA/accuracy
+    near 1.0 on this fixture.
+  - GroupDRO improved WGA relative to ERM but did not match the two strongest
+    methods.
+  - IRM underperformed on this known-group fixture.
+- Sequence seed sweeps with the new baselines:
+  - `07_text_toy`: group-balanced ERM had the best mean WGA among tested methods
+    but reduced average accuracy.
+  - `08_fewshot_ner`: group-balanced ERM and counterfactual augmentation had the
+    best mean WGA, again with accuracy trade-offs.
+- Interpretation:
+  known-group balancing is now a necessary baseline. Future claims must beat
+  group-balanced ERM, not just ERM/IRM. Counterfactual augmentation remains
+  competitive and sometimes stronger, but its advantage is not universal.

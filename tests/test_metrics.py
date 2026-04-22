@@ -69,3 +69,17 @@ def test_irm_runs() -> None:
     model = fit_method(bundle, config)
     metrics = evaluate(model, bundle, config)
     assert 0.0 <= metrics["test/accuracy"] <= 1.0
+
+
+def test_group_robust_baselines_run() -> None:
+    for method in ("group_balanced_erm", "group_dro"):
+        config = {
+            "seed": 3,
+            "dataset": {"kind": "synthetic_linear", "n": 120},
+            "method": {"kind": method, "hidden_dim": 8},
+            "training": {"device": "cpu", "epochs": 1, "batch_size": 32},
+        }
+        bundle = load_dataset(config)
+        model = fit_method(bundle, config)
+        metrics = evaluate(model, bundle, config)
+        assert 0.0 <= metrics["test/accuracy"] <= 1.0

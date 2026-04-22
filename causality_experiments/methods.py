@@ -6,7 +6,7 @@ from typing import Any, Protocol
 import torch
 from torch import nn
 from torch.nn import functional as F
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader, TensorDataset, WeightedRandomSampler
 
 from .data import DatasetBundle
 
@@ -183,6 +183,108 @@ def fit_erm(bundle: DatasetBundle, config: dict[str, Any]) -> TorchClassifier:
     return TorchClassifier(model, device)
 
 
+def _fit_minibatch_classifier(
+    bundle: DatasetBundle,
+    config: dict[str, Any],
+    *,
+    balanced_groups: bool = False,
+) -> TorchClassifier:
+    method = dict(config.get("method", {}))
+    training = dict(config.get("training", {}))
+    seed = int(config.get("seed", 0))
+    torch.manual_seed(seed)
+    device = _device(str(training.get("device", "auto")))
+    model = _make_model(bundle, method).to(device)
+    train = bundle.split("train")
+    dataset = TensorDataset(train["x"], train["y"])
+    generator = torch.Generator().manual_seed(seed)
+    if balanced_groups:
+        groups = train["group"]
+        counts = torch.bincount(groups)
+        weights = 1.0 / counts.clamp_min(1).float()[groups]
+        sampler = WeightedRandomSampler(
+            weights=weights,
+            num_samples=len(weights),
+            replacement=True,
+            generator=generator,
+        )
+        loader = DataLoader(
+            dataset,
+            batch_size=int(training.get("batch_size", 64)),
+            sampler=sampler,
+        )
+    else:
+        loader = DataLoader(
+            dataset,
+            batch_size=int(training.get("batch_size", 64)),
+            shuffle=True,
+            generator=generator,
+        )
+    opt = torch.optim.Adam(
+        model.parameters(),
+        lr=float(training.get("lr", 1e-3)),
+        weight_decay=float(training.get("weight_decay", 0.0)),
+    )
+    epochs = int(training.get("epochs", 20))
+    clip_grad = float(training.get("clip_grad", 1.0))
+    for _ in range(epochs):
+        model.train()
+        for xb, yb in loader:
+            xb = xb.to(device)
+            yb = yb.to(device)
+            opt.zero_grad(set_to_none=True)
+            loss = F.cross_entropy(model(xb), yb)
+            loss.backward()
+            if clip_grad > 0:
+                nn.utils.clip_grad_norm_(model.parameters(), clip_grad)
+            opt.step()
+    return TorchClassifier(model, device)
+
+
+def fit_group_balanced_erm(bundle: DatasetBundle, config: dict[str, Any]) -> TorchClassifier:
+    return _fit_minibatch_classifier(bundle, config, balanced_groups=True)
+
+
+def fit_group_dro(bundle: DatasetBundle, config: dict[str, Any]) -> TorchClassifier:
+    method = dict(config.get("method", {}))
+    training = dict(config.get("training", {}))
+    seed = int(config.get("seed", 0))
+    torch.manual_seed(seed)
+    device = _device(str(training.get("device", "auto")))
+    model = _make_model(bundle, method).to(device)
+    train = bundle.split("train")
+    x = train["x"].to(device)
+    y = train["y"].to(device)
+    group = train["group"].to(device)
+    groups = torch.unique(group)
+    group_weights = torch.ones(len(groups), device=device) / len(groups)
+    opt = torch.optim.Adam(
+        model.parameters(),
+        lr=float(training.get("lr", 1e-3)),
+        weight_decay=float(training.get("weight_decay", 0.0)),
+    )
+    epochs = int(training.get("epochs", 60))
+    eta = float(method.get("dro_eta", 0.1))
+    clip_grad = float(training.get("clip_grad", 1.0))
+    for _ in range(epochs):
+        model.train()
+        opt.zero_grad(set_to_none=True)
+        losses = []
+        for group_id in groups:
+            mask = group == group_id
+            losses.append(F.cross_entropy(model(x[mask]), y[mask]))
+        group_losses = torch.stack(losses)
+        with torch.no_grad():
+            group_weights *= torch.exp(eta * group_losses.detach())
+            group_weights /= group_weights.sum().clamp_min(1e-12)
+        loss = torch.sum(group_weights.detach() * group_losses)
+        loss.backward()
+        if clip_grad > 0:
+            nn.utils.clip_grad_norm_(model.parameters(), clip_grad)
+        opt.step()
+    return TorchClassifier(model, device)
+
+
 def fit_counterfactual_augmentation(bundle: DatasetBundle, config: dict[str, Any]) -> TorchClassifier:
     if bundle.causal_mask is None:
         raise ValueError("Counterfactual augmentation requires dataset.causal_mask.")
@@ -298,6 +400,8 @@ METHODS = {
     "constant": fit_constant,
     "oracle": fit_oracle,
     "erm": fit_erm,
+    "group_balanced_erm": fit_group_balanced_erm,
+    "group_dro": fit_group_dro,
     "irm": fit_irm,
     "counterfactual_augmentation": fit_counterfactual_augmentation,
     "causal_probe": fit_adapter_only,

@@ -58,3 +58,12 @@ issues unless they invalidate an experimental result.
     claims from isolated runs.
   - Action: use seed-sweep mean/std reporting for sequence claims and add
     stronger sequence baselines before treating improvements as meaningful.
+
+- **IRM as the primary known-group robustness baseline**
+  - Attempt: compare new methods mainly against ERM and IRM.
+  - Result: after adding group-balanced ERM and GroupDRO, IRM is clearly not the
+    strongest known-group comparator on the current fixtures.
+  - Interpretation: IRM is still useful as an invariance baseline, but it is too
+    weak and penalty-sensitive to serve as the main robustness target.
+  - Action: future progress claims should include group-balanced ERM and, where
+    group labels are available, GroupDRO-style training.

@@ -13,7 +13,13 @@ from causality_experiments.run import summarize_runs
 
 def _experiment_name(run: str) -> str:
     base = run
-    for suffix in ("_counterfactual_augmentation", "_irm", "_erm"):
+    for suffix in (
+        "_counterfactual_augmentation",
+        "_group_balanced_erm",
+        "_group_dro",
+        "_irm",
+        "_erm",
+    ):
         if base.endswith(suffix):
             return base[: -len(suffix)]
     return base
@@ -30,7 +36,13 @@ def main() -> None:
             latest[key] = row
     grouped: dict[str, list[dict[str, str]]] = {}
     for row in latest.values():
-        if row.get("method") not in {"erm", "irm", "counterfactual_augmentation"}:
+        if row.get("method") not in {
+            "erm",
+            "group_balanced_erm",
+            "group_dro",
+            "irm",
+            "counterfactual_augmentation",
+        }:
             continue
         config_name = row.get("config") or row["run"]
         if "_irm_w" in config_name or "_seed" in config_name:
