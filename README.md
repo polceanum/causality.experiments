@@ -34,12 +34,12 @@ conda run -n orpheus python -m causality_experiments summarize --runs outputs/ru
 - `causality_experiments.data` provides dataset adapters and tiny generated
   mirrors for all 8 experiments described in the source document.
 - `causality_experiments.methods` provides runnable `constant`, `oracle`, and
-  `erm` baselines plus adapter contracts for IRM, counterfactual augmentation,
-  causal probes, β-VAE/iVAE/CITRIS/CSML/DeepIV.
+  `erm`, `irm`, and `counterfactual_augmentation` baselines plus adapter
+  contracts for causal probes, β-VAE/iVAE/CITRIS/CSML/DeepIV.
 - `causality_experiments.metrics` records accuracy, worst-group accuracy,
   support recovery, and an ATE-style proxy where ground truth supports it.
 - `configs/experiments` contains one runnable fixture config per experiment.
 
-The advanced causal methods are intentionally explicit adapter stubs in this
+The heavier causal methods are intentionally explicit adapter stubs in this
 first pass. They can be implemented behind the same fit/predict interface
 without changing datasets, metrics, or run outputs.

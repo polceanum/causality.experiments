@@ -5,6 +5,7 @@ from typing import Any, Protocol
 
 import torch
 from torch import nn
+from torch.nn import functional as F
 from torch.utils.data import DataLoader, TensorDataset
 
 from .data import DatasetBundle
@@ -141,6 +142,109 @@ def fit_erm(bundle: DatasetBundle, config: dict[str, Any]) -> TorchClassifier:
     return TorchClassifier(model, device)
 
 
+def fit_counterfactual_augmentation(bundle: DatasetBundle, config: dict[str, Any]) -> TorchClassifier:
+    if bundle.causal_mask is None:
+        raise ValueError("Counterfactual augmentation requires dataset.causal_mask.")
+    method = dict(config.get("method", {}))
+    training = dict(config.get("training", {}))
+    seed = int(config.get("seed", 0))
+    torch.manual_seed(seed)
+    device = _device(str(training.get("device", "auto")))
+    model = MLP(
+        bundle.input_dim,
+        bundle.output_dim,
+        hidden_dim=int(method.get("hidden_dim", 64)),
+    ).to(device)
+    train = bundle.split("train")
+    dataset = TensorDataset(train["x"], train["y"])
+    loader = DataLoader(
+        dataset,
+        batch_size=int(training.get("batch_size", 64)),
+        shuffle=True,
+        generator=torch.Generator().manual_seed(seed),
+    )
+    opt = torch.optim.Adam(
+        model.parameters(),
+        lr=float(training.get("lr", 1e-3)),
+        weight_decay=float(training.get("weight_decay", 0.0)),
+    )
+    causal_mask = bundle.causal_mask.to(device)
+    nuisance_mask = 1.0 - causal_mask
+    consistency_weight = float(method.get("consistency_weight", 0.2))
+    epochs = int(training.get("epochs", 20))
+    clip_grad = float(training.get("clip_grad", 1.0))
+    for _ in range(epochs):
+        model.train()
+        for xb, yb in loader:
+            xb = xb.to(device)
+            yb = yb.to(device)
+            perm = torch.randperm(len(xb), device=device)
+            x_cf = xb * causal_mask + xb[perm] * nuisance_mask
+            opt.zero_grad(set_to_none=True)
+            logits = model(xb)
+            cf_logits = model(x_cf)
+            label_loss = F.cross_entropy(logits, yb) + F.cross_entropy(cf_logits, yb)
+            consistency = F.mse_loss(F.softmax(logits, dim=1), F.softmax(cf_logits, dim=1))
+            loss = label_loss + consistency_weight * consistency
+            loss.backward()
+            if clip_grad > 0:
+                nn.utils.clip_grad_norm_(model.parameters(), clip_grad)
+            opt.step()
+    return TorchClassifier(model, device)
+
+
+def _irm_penalty(logits: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    scale = torch.tensor(1.0, device=logits.device, requires_grad=True)
+    loss = F.cross_entropy(logits * scale, y)
+    grad = torch.autograd.grad(loss, [scale], create_graph=True)[0]
+    return torch.sum(grad**2)
+
+
+def fit_irm(bundle: DatasetBundle, config: dict[str, Any]) -> TorchClassifier:
+    method = dict(config.get("method", {}))
+    training = dict(config.get("training", {}))
+    seed = int(config.get("seed", 0))
+    torch.manual_seed(seed)
+    device = _device(str(training.get("device", "auto")))
+    model = MLP(
+        bundle.input_dim,
+        bundle.output_dim,
+        hidden_dim=int(method.get("hidden_dim", 64)),
+    ).to(device)
+    train = bundle.split("train")
+    x = train["x"].to(device)
+    y = train["y"].to(device)
+    env = train["env"].to(device)
+    opt = torch.optim.Adam(
+        model.parameters(),
+        lr=float(training.get("lr", 1e-3)),
+        weight_decay=float(training.get("weight_decay", 0.0)),
+    )
+    epochs = int(training.get("epochs", 100))
+    penalty_weight = float(method.get("penalty_weight", 100.0))
+    anneal_epochs = int(method.get("anneal_epochs", 10))
+    clip_grad = float(training.get("clip_grad", 1.0))
+    for epoch in range(epochs):
+        model.train()
+        opt.zero_grad(set_to_none=True)
+        risks = []
+        penalties = []
+        for env_id in torch.unique(env):
+            mask = env == env_id
+            logits = model(x[mask])
+            risks.append(F.cross_entropy(logits, y[mask]))
+            penalties.append(_irm_penalty(logits, y[mask]))
+        risk = torch.stack(risks).mean()
+        penalty = torch.stack(penalties).mean()
+        weight = penalty_weight if epoch >= anneal_epochs else 1.0
+        loss = risk + weight * penalty
+        loss.backward()
+        if clip_grad > 0:
+            nn.utils.clip_grad_norm_(model.parameters(), clip_grad)
+        opt.step()
+    return TorchClassifier(model, device)
+
+
 def fit_adapter_only(bundle: DatasetBundle, config: dict[str, Any]) -> FittedModel:
     name = str(config.get("method", {}).get("kind", "adapter"))
     raise NotImplementedError(
@@ -153,8 +257,8 @@ METHODS = {
     "constant": fit_constant,
     "oracle": fit_oracle,
     "erm": fit_erm,
-    "irm": fit_adapter_only,
-    "counterfactual_augmentation": fit_adapter_only,
+    "irm": fit_irm,
+    "counterfactual_augmentation": fit_counterfactual_augmentation,
     "causal_probe": fit_adapter_only,
     "beta_vae": fit_adapter_only,
     "ivae": fit_adapter_only,

@@ -26,3 +26,29 @@ def test_oracle_reports_support_recovery() -> None:
     model = fit_method(bundle, config)
     metrics = evaluate(model, bundle, config)
     assert metrics["support_recovery"] == 1.0
+
+
+def test_counterfactual_augmentation_runs() -> None:
+    config = {
+        "seed": 3,
+        "dataset": {"kind": "synthetic_linear", "n": 120},
+        "method": {"kind": "counterfactual_augmentation", "hidden_dim": 8},
+        "training": {"device": "cpu", "epochs": 1, "batch_size": 32},
+    }
+    bundle = load_dataset(config)
+    model = fit_method(bundle, config)
+    metrics = evaluate(model, bundle, config)
+    assert 0.0 <= metrics["test/accuracy"] <= 1.0
+
+
+def test_irm_runs() -> None:
+    config = {
+        "seed": 3,
+        "dataset": {"kind": "synthetic_linear", "n": 120},
+        "method": {"kind": "irm", "hidden_dim": 8, "penalty_weight": 1.0},
+        "training": {"device": "cpu", "epochs": 1},
+    }
+    bundle = load_dataset(config)
+    model = fit_method(bundle, config)
+    metrics = evaluate(model, bundle, config)
+    assert 0.0 <= metrics["test/accuracy"] <= 1.0

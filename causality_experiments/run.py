@@ -64,10 +64,12 @@ def summarize_runs(runs_dir: str | Path) -> Path:
     rows: list[dict[str, str]] = []
     for metrics_path in sorted(root.glob("*/metrics.json")):
         payload = json.loads(metrics_path.read_text(encoding="utf-8"))
+        config = payload.get("config", {})
         row = {
             "run": metrics_path.parent.name,
             "dataset": payload.get("dataset", {}).get("name", ""),
-            "method": payload.get("config", {}).get("method", {}).get("kind", ""),
+            "config": config.get("name", ""),
+            "method": config.get("method", {}).get("kind", ""),
         }
         row.update({k: str(v) for k, v in payload.get("metrics", {}).items()})
         rows.append(row)
