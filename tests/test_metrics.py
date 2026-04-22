@@ -83,3 +83,31 @@ def test_group_robust_baselines_run() -> None:
         model = fit_method(bundle, config)
         metrics = evaluate(model, bundle, config)
         assert 0.0 <= metrics["test/accuracy"] <= 1.0
+
+
+def test_probe_diagnostics_are_reported_for_torch_model() -> None:
+    config = {
+        "seed": 3,
+        "dataset": {"kind": "waterbirds_tiny", "n": 120},
+        "method": {"kind": "erm", "hidden_dim": 8},
+        "training": {"device": "cpu", "epochs": 1, "batch_size": 32},
+    }
+    bundle = load_dataset(config)
+    model = fit_method(bundle, config)
+    metrics = evaluate(model, bundle, config)
+    assert "probe/causal_accuracy" in metrics
+    assert "probe/nuisance_accuracy" in metrics
+    assert "probe/selectivity" in metrics
+
+
+def test_probe_diagnostics_handle_multiclass_environment() -> None:
+    config = {
+        "seed": 3,
+        "dataset": {"kind": "dsprites_tiny", "n": 120},
+        "method": {"kind": "erm", "hidden_dim": 8},
+        "training": {"device": "cpu", "epochs": 1, "batch_size": 32},
+    }
+    bundle = load_dataset(config)
+    model = fit_method(bundle, config)
+    metrics = evaluate(model, bundle, config)
+    assert "probe/nuisance_accuracy" in metrics

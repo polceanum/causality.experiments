@@ -148,3 +148,23 @@ signals. Keep this focused on what was tried and what was learned.
   is not a general solution for the sequence fixtures. Future method claims
   should compare against JTT on Waterbirds-style tasks and against
   group-balanced ERM on known-group sequence tasks.
+
+## 2026-04-22: First Causal Probe Diagnostics
+
+- Added hidden-representation extraction for the small MLP and sequence models.
+- Added linear probe diagnostics to every evaluation:
+  - `probe/causal_accuracy`
+  - `probe/nuisance_accuracy`
+  - `probe/selectivity`
+- Added a probe diagnostics report script.
+- Initial Waterbirds-style diagnostic:
+  robust methods with high WGA have slightly higher causal-vs-nuisance
+  selectivity than ERM/IRM/GroupDRO, but nuisance information remains decodable.
+- Initial text-toy diagnostic:
+  nuisance tokens remain more decodable than causal tokens across all current
+  methods, matching the weak/high-variance sequence WGA story.
+- Interpretation:
+  probing is useful as a diagnostic, but this version is not yet a causal
+  intervention method. The next research step is to use probe information to
+  regularize or intervene on representations, then compare against JTT and
+  group-balanced ERM.

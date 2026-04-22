@@ -56,6 +56,12 @@ conda run -n orpheus python scripts/run_seed_sweep.py --match 07 --seeds 11,12,1
 conda run -n orpheus python scripts/report_seed_sweep.py --match 07
 ```
 
+Report causal/nuisance probe diagnostics:
+
+```bash
+conda run -n orpheus python scripts/report_probe_diagnostics.py --match 05_waterbirds
+```
+
 ## Shape of the implementation
 
 - `causality_experiments.data` provides dataset adapters and tiny generated

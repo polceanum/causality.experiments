@@ -46,6 +46,8 @@ goal, not incidental development mechanics.
   be included in future claims.
 - JTT is implemented as a local two-stage baseline. It is strong on the
   Waterbirds-style fixture but not uniformly strong on sequence fixtures.
+- Hidden-representation extraction and linear causal/nuisance probe diagnostics
+  are implemented for small local models.
 - Adapter stubs still intentionally remain for heavier methods:
   causal probes, beta-VAE/iVAE, CITRIS, CSML, and DeepIV.
 - Core commands:
@@ -56,6 +58,7 @@ goal, not incidental development mechanics.
   - `conda run -n orpheus python scripts/write_research_report.py`
   - `conda run -n orpheus python scripts/run_seed_sweep.py --match 07 --seeds 11,12,13`
   - `conda run -n orpheus python scripts/report_seed_sweep.py --match 07`
+  - `conda run -n orpheus python scripts/report_probe_diagnostics.py --match 05_waterbirds`
   - `conda run -n orpheus python -m causality_experiments summarize --runs outputs/runs`
 - GitHub Actions CI runs `pytest` plus a tiny CLI smoke test on pushes and pull
   requests.
@@ -66,11 +69,10 @@ goal, not incidental development mechanics.
    - Train a probe on learned hidden representations for fixture concepts.
    - Add completeness/selectivity metrics where fixture metadata supports it.
    - Keep the probe small and local; no external model APIs.
-2. Start a concrete causal probing baseline.
-   - Expose hidden representations from small models.
-   - Train a lightweight probe for fixture causal/nuisance concepts.
-   - Measure whether probe-guided interventions improve WGA beyond the robust
-     baselines.
+2. Turn probing from diagnostics into an intervention/regularizer.
+   - Use nuisance probe directions to penalize nuisance decodability or
+     sensitivity.
+   - Compare against JTT and group-balanced ERM.
 3. Add real-data adapter documentation.
    - Specify expected local file formats for Waterbirds, dSprites/3DShapes,
      Causal3DIdent, and NER before implementing dataset-specific loaders.

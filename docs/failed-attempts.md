@@ -77,3 +77,14 @@ issues unless they invalidate an experimental result.
     minority groups, but it can overcorrect or amplify noisy sequence errors.
   - Action: keep JTT as a required baseline for clean spurious-correlation
     settings, but do not treat it as evidence for causal detection by itself.
+
+- **Linear probes as sufficient causal detection**
+  - Attempt: add causal/nuisance linear probes on hidden representations and
+    inspect selectivity.
+  - Result: probes are diagnostic, but nuisance information remains decodable
+    even in strong robust models. On text fixtures, nuisance is more decodable
+    than the causal token across current methods.
+  - Interpretation: decodability is not equivalent to model reliance or causal
+    use.
+  - Action: use probes as diagnostics and as ingredients for future
+    intervention/regularization, not as standalone proof of causal detection.

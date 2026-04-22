@@ -18,6 +18,9 @@ class FittedModel(Protocol):
     def feature_importance(self) -> torch.Tensor | None:
         ...
 
+    def representations(self, x: torch.Tensor) -> torch.Tensor | None:
+        ...
+
 
 @dataclass
 class ConstantModel:
@@ -30,6 +33,9 @@ class ConstantModel:
         return logits
 
     def feature_importance(self) -> torch.Tensor | None:
+        return None
+
+    def representations(self, x: torch.Tensor) -> torch.Tensor | None:
         return None
 
 
@@ -49,6 +55,9 @@ class OracleMaskModel:
     def feature_importance(self) -> torch.Tensor | None:
         return self.causal_mask
 
+    def representations(self, x: torch.Tensor) -> torch.Tensor | None:
+        return x
+
 
 class MLP(nn.Module):
     def __init__(self, input_dim: int, output_dim: int, hidden_dim: int = 64) -> None:
@@ -63,6 +72,12 @@ class MLP(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.net(x)
+
+    def encode(self, x: torch.Tensor) -> torch.Tensor:
+        hidden = x
+        for layer in list(self.net.children())[:-1]:
+            hidden = layer(hidden)
+        return hidden
 
 
 class SequenceClassifier(nn.Module):
@@ -82,10 +97,12 @@ class SequenceClassifier(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(self.encode(x))
+
+    def encode(self, x: torch.Tensor) -> torch.Tensor:
         tokens = x.long().clamp_min(0)
         embedded = self.embedding(tokens)
-        pooled = embedded.mean(dim=1)
-        return self.net(pooled)
+        return embedded.mean(dim=1)
 
 
 @dataclass
@@ -105,6 +122,13 @@ class TorchClassifier:
         if first is None:
             return None
         return first.weight.detach().abs().mean(dim=0).cpu()
+
+    def representations(self, x: torch.Tensor) -> torch.Tensor | None:
+        if not hasattr(self.model, "encode"):
+            return None
+        self.model.eval()
+        with torch.no_grad():
+            return self.model.encode(x.to(self.device)).cpu()
 
 
 def _device(name: str | None) -> torch.device:
