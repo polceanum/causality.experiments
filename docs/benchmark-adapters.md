@@ -37,6 +37,15 @@ Feature columns:
 - Also accepted: columns starting with `x`.
 - Fallback: all remaining numeric columns not used as metadata.
 
+Optional causal mask for counterfactual methods:
+
+- Add `dataset.causal_feature_columns` to list feature columns that should be
+  preserved under counterfactual nuisance swaps.
+- Or add `dataset.causal_feature_prefixes` for grouped features, for example
+  `bird_`.
+- Without this mask, methods such as `counterfactual_adversarial` are
+  intentionally unavailable on real feature tables.
+
 Literature comparability requirements:
 
 - Use real Waterbirds train/validation/test splits.

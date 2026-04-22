@@ -11,6 +11,10 @@ seed: 101
 dataset:
   kind: waterbirds_features
   path: data/waterbirds/features.csv
+  # Optional: enable counterfactual methods when the feature table has known
+  # causal bird-specific columns.
+  # causal_feature_prefixes:
+  #   - bird_
 method:
   kind: erm
   hidden_dim: 64

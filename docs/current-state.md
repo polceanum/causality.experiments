@@ -70,6 +70,8 @@ goal, not incidental development mechanics.
   - `conda run -n orpheus python scripts/report_probe_diagnostics.py --match 05_waterbirds`
   - `conda run -n orpheus python scripts/report_benchmark_alignment.py`
   - `conda run -n orpheus python -m causality_experiments run --config configs/benchmarks/waterbirds_features.yaml`
+  - `conda run -n orpheus python scripts/run_method_sweep.py --config configs/benchmarks/waterbirds_features.yaml --skip-incompatible --dry-run`
+  - `conda run -n orpheus python scripts/run_method_sweep.py --config configs/benchmarks/waterbirds_features.yaml --skip-incompatible`
   - `conda run -n orpheus python -m causality_experiments summarize --runs outputs/runs`
 - GitHub Actions CI runs `pytest` plus a tiny CLI smoke test on pushes and pull
   requests.
@@ -86,6 +88,9 @@ goal, not incidental development mechanics.
 1. Get a real Waterbirds-compatible feature run.
    - Use local features, real splits, labels, and group/background metadata.
    - Compare WGA against literature references in `docs/literature-context.md`.
+   - If the feature table has known bird-specific feature columns, set
+     `dataset.causal_feature_columns` or `dataset.causal_feature_prefixes` so
+     counterfactual methods can run honestly.
 2. Compose the strongest local mechanisms.
    - Tune counterfactual adversarial training against JTT and group-balanced
      ERM before claiming progress.

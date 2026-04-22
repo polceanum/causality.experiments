@@ -238,3 +238,18 @@ signals. Keep this focused on what was tried and what was learned.
   signal only. The next decisive step is to run the same method on a real
   Waterbirds-compatible local feature table and compare against published WGA
   references.
+
+## 2026-04-22: Real-Adapter Readiness
+
+- Checked for `data/waterbirds/features.csv`; no local feature table is present
+  yet, so no real Waterbirds comparison can be run on this machine right now.
+- Added an optional causal-mask contract to the Waterbirds feature adapter:
+  `dataset.causal_feature_columns` or `dataset.causal_feature_prefixes`.
+- Extended method sweeps so a specific benchmark config can be swept with
+  `--config`, and incompatible counterfactual methods can be skipped when a
+  real feature table has no known causal/nuisance feature mask.
+- Interpretation:
+  the next SOTA-relevant experiment is now operationally clear. Once local
+  Waterbirds features exist, run the benchmark sweep with all applicable
+  methods, then only enable counterfactual methods if the feature schema
+  provides a defensible causal feature mask.

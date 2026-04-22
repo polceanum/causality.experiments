@@ -60,3 +60,34 @@ def test_waterbirds_feature_adapter_loads_local_csv(tmp_path) -> None:
     assert bundle.metadata is not None
     assert bundle.metadata["fixture"] is False
     assert bundle.split("train")["group"].tolist() == [0, 3]
+
+
+def test_waterbirds_feature_adapter_accepts_optional_causal_mask(tmp_path) -> None:
+    csv_path = tmp_path / "features.csv"
+    csv_path.write_text(
+        "\n".join(
+            [
+                "split,y,place,bird_shape_0,bird_shape_1,background_0",
+                "train,0,0,0.0,1.0,0.1",
+                "train,1,1,1.0,0.0,0.9",
+                "val,0,1,0.2,0.8,0.8",
+                "val,1,0,0.8,0.2,0.2",
+                "test,0,0,0.1,0.9,0.3",
+                "test,1,1,0.9,0.1,0.7",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    bundle = load_dataset(
+        {
+            "dataset": {
+                "kind": "waterbirds_features",
+                "path": str(csv_path),
+                "causal_feature_prefixes": ["bird_"],
+            }
+        }
+    )
+    assert bundle.causal_mask is not None
+    assert bundle.causal_mask.tolist() == [1.0, 1.0, 0.0]
+    assert bundle.metadata is not None
+    assert bundle.metadata["causal_feature_columns"] == ["bird_shape_0", "bird_shape_1"]

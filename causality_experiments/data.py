@@ -221,6 +221,7 @@ def _waterbirds_features(config: dict[str, Any]) -> DatasetBundle:
         ]
     if not feature_cols:
         raise ValueError("Waterbirds feature adapter could not infer any numeric feature columns.")
+    causal_mask = _feature_causal_mask(feature_cols, config)
 
     splits: dict[str, dict[str, torch.Tensor]] = {}
     for split_name in ("train", "val", "test"):
@@ -245,17 +246,41 @@ def _waterbirds_features(config: dict[str, Any]) -> DatasetBundle:
         splits=splits,
         input_dim=len(feature_cols),
         output_dim=int(frame[label_col].max()) + 1,
-        causal_mask=None,
+        causal_mask=causal_mask,
         metadata={
             "fixture": False,
             "modality": "features",
             "source_path": str(path),
             "feature_columns": feature_cols,
+            "causal_feature_columns": [
+                col
+                for col, keep in zip(feature_cols, causal_mask.tolist(), strict=True)
+                if keep > 0.0
+            ]
+            if causal_mask is not None
+            else [],
             "label_column": label_col,
             "environment_column": env_col,
             "group_column": group_col,
         },
     )
+
+
+def _feature_causal_mask(feature_cols: list[str], config: dict[str, Any]) -> torch.Tensor | None:
+    explicit = set(str(col) for col in config.get("causal_feature_columns", []) or [])
+    prefixes = tuple(str(prefix) for prefix in config.get("causal_feature_prefixes", []) or [])
+    if not explicit and not prefixes:
+        return None
+    values = [
+        1.0 if col in explicit or col.startswith(prefixes) else 0.0
+        for col in feature_cols
+    ]
+    if not any(values):
+        raise ValueError(
+            "Waterbirds feature adapter causal mask selected no feature columns. "
+            "Check causal_feature_columns or causal_feature_prefixes."
+        )
+    return torch.tensor(values, dtype=torch.float32)
 
 
 DATASETS: dict[str, DatasetFactory] = {
