@@ -65,6 +65,9 @@ goal, not incidental development mechanics.
   - `conda run -n orpheus python -m causality_experiments summarize --runs outputs/runs`
 - GitHub Actions CI runs `pytest` plus a tiny CLI smoke test on pushes and pull
   requests.
+- Result reports should include literature context where possible. Tiny fixture
+  results are not SOTA claims; real benchmark adapters are required for direct
+  comparison to published numbers.
 
 ## Near-Term Plan
 
@@ -79,6 +82,8 @@ goal, not incidental development mechanics.
    - Specify expected local file formats for Waterbirds, dSprites/3DShapes,
      Causal3DIdent, and NER before implementing dataset-specific loaders.
 4. Use group-balanced ERM as a required comparator for any known-group result.
+5. For every serious result, compare against literature reference/SOTA numbers
+   and cite the source; update `docs/literature-context.md` as needed.
 
 ## Current Risks
 
@@ -91,6 +96,8 @@ goal, not incidental development mechanics.
 - Sequence WGA improvements are promising but high-variance across seeds.
 - Some known-group baselines improve WGA by sacrificing average accuracy; reports
   should continue showing both.
+- Fixture wins can be misleadingly high; compare to SOTA only on real benchmark
+  adapters with matching assumptions.
 
 ## Log Hygiene
 

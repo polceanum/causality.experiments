@@ -81,6 +81,13 @@ def main() -> None:
         "",
         "Best method is selected by test worst-group accuracy.",
         "",
+        "## Literature Context",
+        "",
+        "- Fixture numbers are not state-of-the-art claims.",
+        "- Compare tiny fixtures only against local baselines.",
+        "- For real benchmarks, refresh `docs/literature-context.md` and report published reference/SOTA numbers next to local results.",
+        "- Current `05_waterbirds` is Waterbirds-style, not the real Waterbirds benchmark; its WGA is not directly comparable to published Waterbirds numbers.",
+        "",
         "| Experiment | Best Method | Test WGA | Test Acc | Support | ATE Proxy | Run |",
         "| --- | --- | ---: | ---: | ---: | ---: | --- |",
     ]

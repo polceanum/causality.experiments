@@ -83,3 +83,4 @@ without changing datasets, metrics, or run outputs.
 - [Research log](docs/research-log.md)
 - [Failed attempts log](docs/failed-attempts.md)
 - [Current state and plan](docs/current-state.md)
+- [Literature context](docs/literature-context.md)

@@ -188,3 +188,15 @@ signals. Keep this focused on what was tried and what was learned.
   spurious-feature settings, but it is not yet robust on sequence fixtures.
   The next version likely needs token/factor-specific interventions rather than
   only hiding environment information from pooled representations.
+
+## 2026-04-22: Literature Context Requirement
+
+- Added a reporting rule:
+  future result summaries should compare against existing literature reference
+  or SOTA numbers where possible.
+- Important caveat:
+  current benchmark names like `05_waterbirds` are tiny local fixtures, not real
+  benchmark adapters. Their high WGA values are useful for iteration but not
+  comparable to published Waterbirds numbers.
+- Added `docs/literature-context.md` with initial Waterbirds/JTT context and a
+  reminder to refresh sources before serious claims.
