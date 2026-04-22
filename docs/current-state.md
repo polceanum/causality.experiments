@@ -35,6 +35,7 @@ goal, not incidental development mechanics.
   - `group_balanced_erm`
   - `group_dro`
   - `irm`
+  - `jtt`
   - `counterfactual_augmentation`
 - Sequence fixtures now use integer tokens, an embedding-pooling classifier,
   and token-specific counterfactual augmentation.
@@ -43,6 +44,8 @@ goal, not incidental development mechanics.
 - Group-balanced ERM and GroupDRO are implemented as local PyTorch baselines.
 - Group-balanced ERM is now a strong baseline on known-group fixtures and must
   be included in future claims.
+- JTT is implemented as a local two-stage baseline. It is strong on the
+  Waterbirds-style fixture but not uniformly strong on sequence fixtures.
 - Adapter stubs still intentionally remain for heavier methods:
   causal probes, beta-VAE/iVAE, CITRIS, CSML, and DeepIV.
 - Core commands:
@@ -63,7 +66,11 @@ goal, not incidental development mechanics.
    - Train a probe on learned hidden representations for fixture concepts.
    - Add completeness/selectivity metrics where fixture metadata supports it.
    - Keep the probe small and local; no external model APIs.
-2. Add JTT-style two-stage reweighting as the next local literature baseline.
+2. Start a concrete causal probing baseline.
+   - Expose hidden representations from small models.
+   - Train a lightweight probe for fixture causal/nuisance concepts.
+   - Measure whether probe-guided interventions improve WGA beyond the robust
+     baselines.
 3. Add real-data adapter documentation.
    - Specify expected local file formats for Waterbirds, dSprites/3DShapes,
      Causal3DIdent, and NER before implementing dataset-specific loaders.

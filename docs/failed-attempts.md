@@ -67,3 +67,13 @@ issues unless they invalidate an experimental result.
     weak and penalty-sensitive to serve as the main robustness target.
   - Action: future progress claims should include group-balanced ERM and, where
     group labels are available, GroupDRO-style training.
+
+- **JTT as a universal robustness fix**
+  - Attempt: add a local JTT-style two-stage baseline and test it on
+    Waterbirds-style and sequence fixtures.
+  - Result: JTT is excellent on the Waterbirds-style fixture, but it loses to
+    group-balanced ERM on text-toy mean WGA and underperforms on few-shot NER.
+  - Interpretation: upweighting mistakes works well when early mistakes expose
+    minority groups, but it can overcorrect or amplify noisy sequence errors.
+  - Action: keep JTT as a required baseline for clean spurious-correlation
+    settings, but do not treat it as evidence for causal detection by itself.

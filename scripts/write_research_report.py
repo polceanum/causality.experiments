@@ -18,6 +18,7 @@ METHODS = {
     "group_balanced_erm",
     "group_dro",
     "irm",
+    "jtt",
     "counterfactual_augmentation",
 }
 
@@ -28,6 +29,7 @@ def _experiment_name(config_name: str) -> str:
         "_group_balanced_erm",
         "_group_dro",
         "_irm",
+        "_jtt",
         "_erm",
     ):
         if config_name.endswith(suffix):

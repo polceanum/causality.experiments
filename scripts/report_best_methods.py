@@ -18,6 +18,7 @@ def _experiment_name(run: str) -> str:
         "_group_balanced_erm",
         "_group_dro",
         "_irm",
+        "_jtt",
         "_erm",
     ):
         if base.endswith(suffix):
@@ -41,6 +42,7 @@ def main() -> None:
             "group_balanced_erm",
             "group_dro",
             "irm",
+            "jtt",
             "counterfactual_augmentation",
         }:
             continue

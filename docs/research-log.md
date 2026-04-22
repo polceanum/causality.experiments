@@ -124,3 +124,27 @@ signals. Keep this focused on what was tried and what was learned.
   known-group balancing is now a necessary baseline. Future claims must beat
   group-balanced ERM, not just ERM/IRM. Counterfactual augmentation remains
   competitive and sometimes stronger, but its advantage is not universal.
+
+## 2026-04-22: JTT-Style Two-Stage Baseline
+
+- Added a local JTT-style baseline:
+  first train ERM, identify misclassified training examples, then retrain with
+  those examples upweighted by sampling weight.
+- Added `jtt` to method sweeps, seed sweeps, reports, README, and regression
+  tests.
+- Focused single-run results:
+  - Waterbirds-style: JTT reached WGA/accuracy 1.0 on the latest run.
+  - Text toy: JTT improved WGA over ERM but with a large average-accuracy
+    trade-off.
+  - Few-shot NER: JTT underperformed IRM and counterfactual augmentation on WGA.
+- Seed-sweep results:
+  - Waterbirds-style: JTT had WGA/accuracy 1.0 across the three new seeds,
+    matching or slightly exceeding counterfactual augmentation and
+    group-balanced ERM on this fixture.
+  - Text toy: JTT did not beat group-balanced ERM on mean WGA and had lower
+    average accuracy.
+- Interpretation:
+  JTT is a strong local baseline for clean spurious-correlation settings, but it
+  is not a general solution for the sequence fixtures. Future method claims
+  should compare against JTT on Waterbirds-style tasks and against
+  group-balanced ERM on known-group sequence tasks.

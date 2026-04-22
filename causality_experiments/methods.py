@@ -285,6 +285,58 @@ def fit_group_dro(bundle: DatasetBundle, config: dict[str, Any]) -> TorchClassif
     return TorchClassifier(model, device)
 
 
+def fit_jtt(bundle: DatasetBundle, config: dict[str, Any]) -> TorchClassifier:
+    method = dict(config.get("method", {}))
+    training = dict(config.get("training", {}))
+    seed = int(config.get("seed", 0))
+    stage1_epochs = int(method.get("stage1_epochs", max(1, int(training.get("epochs", 20)) // 3)))
+    upweight = float(method.get("upweight", 5.0))
+    stage1_config = {
+        **config,
+        "training": {**training, "epochs": stage1_epochs},
+    }
+    stage1 = _fit_minibatch_classifier(bundle, stage1_config, balanced_groups=False)
+    train = bundle.split("train")
+    with torch.no_grad():
+        pred = stage1.predict(train["x"]).argmax(dim=1)
+    weights = torch.ones(len(pred), dtype=torch.float32)
+    weights[pred != train["y"]] = upweight
+
+    torch.manual_seed(seed)
+    device = _device(str(training.get("device", "auto")))
+    model = _make_model(bundle, method).to(device)
+    dataset = TensorDataset(train["x"], train["y"])
+    loader = DataLoader(
+        dataset,
+        batch_size=int(training.get("batch_size", 64)),
+        sampler=WeightedRandomSampler(
+            weights=weights,
+            num_samples=len(weights),
+            replacement=True,
+            generator=torch.Generator().manual_seed(seed + 1),
+        ),
+    )
+    opt = torch.optim.Adam(
+        model.parameters(),
+        lr=float(training.get("lr", 1e-3)),
+        weight_decay=float(training.get("weight_decay", 0.0)),
+    )
+    epochs = int(training.get("epochs", 20))
+    clip_grad = float(training.get("clip_grad", 1.0))
+    for _ in range(epochs):
+        model.train()
+        for xb, yb in loader:
+            xb = xb.to(device)
+            yb = yb.to(device)
+            opt.zero_grad(set_to_none=True)
+            loss = F.cross_entropy(model(xb), yb)
+            loss.backward()
+            if clip_grad > 0:
+                nn.utils.clip_grad_norm_(model.parameters(), clip_grad)
+            opt.step()
+    return TorchClassifier(model, device)
+
+
 def fit_counterfactual_augmentation(bundle: DatasetBundle, config: dict[str, Any]) -> TorchClassifier:
     if bundle.causal_mask is None:
         raise ValueError("Counterfactual augmentation requires dataset.causal_mask.")
@@ -403,6 +455,7 @@ METHODS = {
     "group_balanced_erm": fit_group_balanced_erm,
     "group_dro": fit_group_dro,
     "irm": fit_irm,
+    "jtt": fit_jtt,
     "counterfactual_augmentation": fit_counterfactual_augmentation,
     "causal_probe": fit_adapter_only,
     "beta_vae": fit_adapter_only,
