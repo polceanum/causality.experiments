@@ -1,0 +1,18 @@
+name: 06_shapes_spurious
+seed: 16
+dataset:
+  kind: shapes_spurious_tiny
+  n: 960
+method:
+  kind: erm
+  hidden_dim: 64
+training:
+  device: cpu
+  epochs: 15
+  batch_size: 64
+  lr: 0.001
+metrics:
+  - accuracy
+  - worst_group_accuracy
+  - support_recovery
+output_dir: outputs/runs

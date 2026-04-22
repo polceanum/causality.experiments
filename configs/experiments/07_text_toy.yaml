@@ -1,0 +1,20 @@
+name: 07_text_toy
+seed: 17
+dataset:
+  kind: text_toy
+  n: 900
+  length: 10
+method:
+  kind: erm
+  hidden_dim: 48
+training:
+  device: cpu
+  epochs: 15
+  batch_size: 64
+  lr: 0.001
+metrics:
+  - accuracy
+  - worst_group_accuracy
+  - support_recovery
+  - ate_proxy_error
+output_dir: outputs/runs

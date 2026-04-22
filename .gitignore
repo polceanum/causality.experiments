@@ -191,6 +191,10 @@ cython_debug/
 # Ruff stuff:
 .ruff_cache/
 
+# Causality experiment outputs and generated fixture mirrors
+outputs/
+data/fixtures/
+
 # PyPI configuration file
 .pypirc
 

@@ -1,0 +1,21 @@
+name: 01_synthetic_linear
+seed: 11
+dataset:
+  kind: synthetic_linear
+  n: 900
+  rho_train: 0.9
+  rho_test: -0.7
+method:
+  kind: erm
+  hidden_dim: 32
+training:
+  device: cpu
+  epochs: 15
+  batch_size: 64
+  lr: 0.001
+metrics:
+  - accuracy
+  - worst_group_accuracy
+  - support_recovery
+  - ate_proxy_error
+output_dir: outputs/runs

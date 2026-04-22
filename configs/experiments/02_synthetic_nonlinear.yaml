@@ -1,0 +1,21 @@
+name: 02_synthetic_nonlinear
+seed: 12
+dataset:
+  kind: synthetic_nonlinear
+  n: 900
+  rho_train: 0.85
+  rho_test: -0.65
+method:
+  kind: erm
+  hidden_dim: 48
+training:
+  device: cpu
+  epochs: 18
+  batch_size: 64
+  lr: 0.001
+metrics:
+  - accuracy
+  - worst_group_accuracy
+  - support_recovery
+  - ate_proxy_error
+output_dir: outputs/runs
