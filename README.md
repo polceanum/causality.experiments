@@ -15,6 +15,8 @@ on the existing `orpheus` conda environment without installing new packages.
   and a modest smoke-test path.
 - Prefer small PyTorch models, seed sweeps, and careful metrics over
   compute-heavy architectures that cannot run locally in a reasonable time.
+- CI is only a regression guardrail. It should run lightweight tests and smoke
+  checks, not full research sweeps.
 
 ## Quick start
 

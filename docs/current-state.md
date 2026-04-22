@@ -16,6 +16,8 @@ goal, not incidental development mechanics.
   smoke-test path.
 - Prefer methods that can produce useful research signal through small models,
   controlled fixtures, and seed sweeps within local compute limits.
+- CI should remain a lightweight regression guardrail, not a full experiment
+  runner.
 
 ## Current State
 
@@ -47,6 +49,8 @@ goal, not incidental development mechanics.
   - `conda run -n orpheus python scripts/run_seed_sweep.py --match 07 --seeds 11,12,13`
   - `conda run -n orpheus python scripts/report_seed_sweep.py --match 07`
   - `conda run -n orpheus python -m causality_experiments summarize --runs outputs/runs`
+- GitHub Actions CI runs `pytest` plus a tiny CLI smoke test on pushes and pull
+  requests.
 
 ## Near-Term Plan
 
