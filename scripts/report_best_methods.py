@@ -15,6 +15,7 @@ def _experiment_name(run: str) -> str:
     base = run
     for suffix in (
         "_counterfactual_augmentation",
+        "_adversarial_probe",
         "_group_balanced_erm",
         "_group_dro",
         "_irm",
@@ -43,6 +44,7 @@ def main() -> None:
             "group_dro",
             "irm",
             "jtt",
+            "adversarial_probe",
             "counterfactual_augmentation",
         }:
             continue

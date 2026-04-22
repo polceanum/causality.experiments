@@ -88,3 +88,13 @@ issues unless they invalidate an experimental result.
     use.
   - Action: use probes as diagnostics and as ingredients for future
     intervention/regularization, not as standalone proof of causal detection.
+
+- **Generic adversarial probe training on sequence fixtures**
+  - Attempt: use gradient reversal to hide environment labels from pooled
+    sequence representations.
+  - Result: Waterbirds-style performance was strong, but text-toy WGA stayed at
+    ERM level and nuisance remained more decodable than causal token identity.
+  - Interpretation: sequence fixtures need token-aware interventions or
+    regularizers; pooled representation adversarial training is too blunt.
+  - Action: keep `adversarial_probe` as a promising image/tabular-style method,
+    but develop factor/token-specific probe interventions next.

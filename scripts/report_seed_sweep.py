@@ -20,6 +20,7 @@ METHODS = {
     "group_dro",
     "irm",
     "jtt",
+    "adversarial_probe",
     "counterfactual_augmentation",
 }
 
@@ -27,6 +28,7 @@ METHODS = {
 def _experiment_name(config_name: str) -> str:
     for suffix in (
         "_counterfactual_augmentation",
+        "_adversarial_probe",
         "_group_balanced_erm",
         "_group_dro",
         "_irm",

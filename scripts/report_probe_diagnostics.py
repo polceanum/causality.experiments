@@ -31,7 +31,7 @@ def main() -> None:
         config_name = row.get("config") or row.get("run", "")
         if args.match and args.match not in config_name:
             continue
-        if "_seed" in config_name or "_irm_w" in config_name:
+        if "_seed" in config_name or "_irm_w" in config_name or "_w0p" in config_name or "_w1p" in config_name:
             continue
         key = (config_name, row.get("method", ""))
         if key not in latest or row.get("run", "") > latest[key].get("run", ""):

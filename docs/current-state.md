@@ -36,6 +36,7 @@ goal, not incidental development mechanics.
   - `group_dro`
   - `irm`
   - `jtt`
+  - `adversarial_probe`
   - `counterfactual_augmentation`
 - Sequence fixtures now use integer tokens, an embedding-pooling classifier,
   and token-specific counterfactual augmentation.
@@ -48,6 +49,8 @@ goal, not incidental development mechanics.
   Waterbirds-style fixture but not uniformly strong on sequence fixtures.
 - Hidden-representation extraction and linear causal/nuisance probe diagnostics
   are implemented for small local models.
+- Adversarial probe training is implemented. It is promising on Waterbirds-style
+  fixtures but currently ineffective on text-toy.
 - Adapter stubs still intentionally remain for heavier methods:
   causal probes, beta-VAE/iVAE, CITRIS, CSML, and DeepIV.
 - Core commands:
@@ -69,10 +72,9 @@ goal, not incidental development mechanics.
    - Train a probe on learned hidden representations for fixture concepts.
    - Add completeness/selectivity metrics where fixture metadata supports it.
    - Keep the probe small and local; no external model APIs.
-2. Turn probing from diagnostics into an intervention/regularizer.
-   - Use nuisance probe directions to penalize nuisance decodability or
-     sensitivity.
-   - Compare against JTT and group-balanced ERM.
+2. Develop factor/token-specific probe interventions.
+   - Generic adversarial hiding is too blunt for sequence fixtures.
+   - Use known factor/token metadata to design targeted intervention losses.
 3. Add real-data adapter documentation.
    - Specify expected local file formats for Waterbirds, dSprites/3DShapes,
      Causal3DIdent, and NER before implementing dataset-specific loaders.

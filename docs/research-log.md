@@ -168,3 +168,23 @@ signals. Keep this focused on what was tried and what was learned.
   intervention method. The next research step is to use probe information to
   regularize or intervene on representations, then compare against JTT and
   group-balanced ERM.
+
+## 2026-04-22: Adversarial Probe Training
+
+- Added `adversarial_probe`, a local gradient-reversal method that trains the
+  classifier while an auxiliary head tries to predict environment labels from
+  hidden representations.
+- Focused Waterbirds-style result:
+  adversarial probe training reached WGA/accuracy 1.0 on the latest run,
+  matching JTT and exceeding group-balanced ERM on that single run.
+- Adversarial-weight tuning on Waterbirds-style:
+  `adv_weight=0.05` preserved WGA/accuracy 1.0 while lowering nuisance probe
+  accuracy more than larger weights in the local sweep.
+- Text-toy result:
+  adversarial probe training did not improve WGA over ERM and did not reduce
+  nuisance decodability enough to matter.
+- Interpretation:
+  adversarial probe training is a promising local mechanism for clean
+  spurious-feature settings, but it is not yet robust on sequence fixtures.
+  The next version likely needs token/factor-specific interventions rather than
+  only hiding environment information from pooled representations.
