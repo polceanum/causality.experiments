@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import argparse
 from pathlib import Path
 import sys
 import tempfile
@@ -23,7 +24,20 @@ METHODS = (
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--match",
+        default="",
+        help="Only run configs whose filename or config name contains this text.",
+    )
+    args = parser.parse_args()
     configs = sorted(Path("configs/experiments").glob("*.yaml"))
+    if args.match:
+        configs = [
+            config
+            for config in configs
+            if args.match in config.name or args.match in load_config(config).get("name", "")
+        ]
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         for config_path in configs:

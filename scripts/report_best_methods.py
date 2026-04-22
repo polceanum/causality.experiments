@@ -22,12 +22,18 @@ def _experiment_name(run: str) -> str:
 def main() -> None:
     summary = summarize_runs("outputs/runs")
     rows = list(csv.DictReader(summary.open()))
-    grouped: dict[str, list[dict[str, str]]] = {}
+    latest: dict[tuple[str, str], dict[str, str]] = {}
     for row in rows:
+        config_name = row.get("config") or row["run"]
+        key = (_experiment_name(config_name), row.get("method", ""))
+        if key not in latest or row["run"] > latest[key]["run"]:
+            latest[key] = row
+    grouped: dict[str, list[dict[str, str]]] = {}
+    for row in latest.values():
         if row.get("method") not in {"erm", "irm", "counterfactual_augmentation"}:
             continue
         config_name = row.get("config") or row["run"]
-        if "_irm_w" in config_name:
+        if "_irm_w" in config_name or "_seed" in config_name:
             continue
         grouped.setdefault(_experiment_name(config_name), []).append(row)
     for experiment, items in sorted(grouped.items()):

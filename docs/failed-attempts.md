@@ -49,3 +49,12 @@ issues unless they invalidate an experimental result.
   - Interpretation: the metric is not yet a reliable causal-effect estimator.
   - Action: keep it labeled as a proxy; add task-specific effect metrics before
     reporting causal-effect claims.
+
+- **Single-run sequence improvements as evidence**
+  - Attempt: judge the sequence upgrade from one focused sweep.
+  - Result: the single-run results looked encouraging, but three-seed sweeps
+    showed high variance, especially for few-shot NER.
+  - Interpretation: the sequence fixtures are still noisy and should not support
+    claims from isolated runs.
+  - Action: use seed-sweep mean/std reporting for sequence claims and add
+    stronger sequence baselines before treating improvements as meaningful.

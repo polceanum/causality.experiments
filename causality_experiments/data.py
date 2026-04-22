@@ -149,7 +149,7 @@ def _sequence_fixture(config: dict[str, Any], name: str, ner: bool = False) -> D
     tokens[:, conf_pos] = np.where(rng.random(n) < 0.85, y, 1 - y)
     env = tokens[:, conf_pos].astype(np.int64)
     group = (env * 2 + y).astype(np.int64)
-    x = tokens.astype(np.float32) / 11.0
+    x = tokens.astype(np.float32)
     causal_mask = np.zeros(length, dtype=np.float32)
     causal_mask[cause_pos] = 1.0
     return _classification_splits(
@@ -159,7 +159,13 @@ def _sequence_fixture(config: dict[str, Any], name: str, ner: bool = False) -> D
         env,
         group,
         causal_mask,
-        {"cause_position": cause_pos, "confounder_position": conf_pos, "fixture": True},
+        {
+            "cause_position": cause_pos,
+            "confounder_position": conf_pos,
+            "fixture": True,
+            "modality": "sequence",
+            "vocab_size": 12,
+        },
     )
 
 

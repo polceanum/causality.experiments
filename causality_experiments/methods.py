@@ -65,6 +65,29 @@ class MLP(nn.Module):
         return self.net(x)
 
 
+class SequenceClassifier(nn.Module):
+    def __init__(
+        self,
+        vocab_size: int,
+        output_dim: int,
+        hidden_dim: int = 64,
+        embedding_dim: int = 16,
+    ) -> None:
+        super().__init__()
+        self.embedding = nn.Embedding(vocab_size, embedding_dim)
+        self.net = nn.Sequential(
+            nn.Linear(embedding_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, output_dim),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        tokens = x.long().clamp_min(0)
+        embedded = self.embedding(tokens)
+        pooled = embedded.mean(dim=1)
+        return self.net(pooled)
+
+
 @dataclass
 class TorchClassifier:
     model: nn.Module
@@ -76,6 +99,8 @@ class TorchClassifier:
             return self.model(x.to(self.device)).cpu()
 
     def feature_importance(self) -> torch.Tensor | None:
+        if isinstance(self.model, SequenceClassifier):
+            return None
         first = next((m for m in self.model.modules() if isinstance(m, nn.Linear)), None)
         if first is None:
             return None
@@ -88,6 +113,26 @@ def _device(name: str | None) -> torch.device:
             return torch.device("mps")
         return torch.device("cpu")
     return torch.device(name)
+
+
+def _is_sequence(bundle: DatasetBundle) -> bool:
+    return bool((bundle.metadata or {}).get("modality") == "sequence")
+
+
+def _make_model(bundle: DatasetBundle, method: dict[str, Any]) -> nn.Module:
+    if _is_sequence(bundle):
+        vocab_size = int((bundle.metadata or {}).get("vocab_size", 12))
+        return SequenceClassifier(
+            vocab_size=vocab_size,
+            output_dim=bundle.output_dim,
+            hidden_dim=int(method.get("hidden_dim", 64)),
+            embedding_dim=int(method.get("embedding_dim", 16)),
+        )
+    return MLP(
+        bundle.input_dim,
+        bundle.output_dim,
+        hidden_dim=int(method.get("hidden_dim", 64)),
+    )
 
 
 def fit_constant(bundle: DatasetBundle, config: dict[str, Any]) -> ConstantModel:
@@ -108,11 +153,7 @@ def fit_erm(bundle: DatasetBundle, config: dict[str, Any]) -> TorchClassifier:
     seed = int(config.get("seed", 0))
     torch.manual_seed(seed)
     device = _device(str(training.get("device", "auto")))
-    model = MLP(
-        bundle.input_dim,
-        bundle.output_dim,
-        hidden_dim=int(method.get("hidden_dim", 64)),
-    ).to(device)
+    model = _make_model(bundle, method).to(device)
     train = bundle.split("train")
     dataset = TensorDataset(train["x"], train["y"])
     loader = DataLoader(
@@ -150,11 +191,7 @@ def fit_counterfactual_augmentation(bundle: DatasetBundle, config: dict[str, Any
     seed = int(config.get("seed", 0))
     torch.manual_seed(seed)
     device = _device(str(training.get("device", "auto")))
-    model = MLP(
-        bundle.input_dim,
-        bundle.output_dim,
-        hidden_dim=int(method.get("hidden_dim", 64)),
-    ).to(device)
+    model = _make_model(bundle, method).to(device)
     train = bundle.split("train")
     dataset = TensorDataset(train["x"], train["y"])
     loader = DataLoader(
@@ -179,7 +216,15 @@ def fit_counterfactual_augmentation(bundle: DatasetBundle, config: dict[str, Any
             xb = xb.to(device)
             yb = yb.to(device)
             perm = torch.randperm(len(xb), device=device)
-            x_cf = xb * causal_mask + xb[perm] * nuisance_mask
+            if _is_sequence(bundle):
+                x_cf = xb.clone()
+                conf_pos = int((bundle.metadata or {}).get("confounder_position", -1))
+                if conf_pos >= 0:
+                    x_cf[:, conf_pos] = xb[perm, conf_pos]
+                else:
+                    x_cf = xb * causal_mask + xb[perm] * nuisance_mask
+            else:
+                x_cf = xb * causal_mask + xb[perm] * nuisance_mask
             opt.zero_grad(set_to_none=True)
             logits = model(xb)
             cf_logits = model(x_cf)
@@ -206,11 +251,7 @@ def fit_irm(bundle: DatasetBundle, config: dict[str, Any]) -> TorchClassifier:
     seed = int(config.get("seed", 0))
     torch.manual_seed(seed)
     device = _device(str(training.get("device", "auto")))
-    model = MLP(
-        bundle.input_dim,
-        bundle.output_dim,
-        hidden_dim=int(method.get("hidden_dim", 64)),
-    ).to(device)
+    model = _make_model(bundle, method).to(device)
     train = bundle.split("train")
     x = train["x"].to(device)
     y = train["y"].to(device)

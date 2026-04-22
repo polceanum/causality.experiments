@@ -49,3 +49,40 @@ signals. Keep this focused on what was tried and what was learned.
   approach for simple spurious-correlation tasks, while invariance-only training
   needs careful penalty tuning and task-specific validation. The next research
   bottleneck is making interventions semantically valid for structured data.
+
+## 2026-04-22: Sequence Track Upgrade
+
+- Changed sequence fixtures to preserve integer tokens instead of normalized
+  float vectors.
+- Added an embedding-pooling classifier for sequence datasets.
+- Changed counterfactual augmentation on sequence fixtures to swap only the
+  confounder token position while preserving the causal token.
+- Focused sweep on the sequence tasks:
+  - `07_text_toy`: ERM reached higher average accuracy, but worst-group
+    accuracy dropped; IRM and counterfactual augmentation had lower average
+    accuracy but better worst-group accuracy.
+  - `08_fewshot_ner`: IRM had the best worst-group accuracy among current
+    methods, with counterfactual augmentation also improving over ERM.
+- Interpretation:
+  the sequence model now captures more signal, but ERM still exploits the
+  shortcut. Robust methods improve WGA, suggesting the task is now a more useful
+  intervention benchmark than the original float-token MLP setup.
+
+## 2026-04-22: Sequence Seed Sweep
+
+- Added seed-sweep scripts so fixture claims can move from single-run anecdotes
+  to mean/std comparisons.
+- Ran three-seed sweeps on `07_text_toy` and `08_fewshot_ner`.
+- `07_text_toy` mean results:
+  - ERM: WGA 0.235 +/- 0.098, accuracy 0.763 +/- 0.008.
+  - IRM: WGA 0.364 +/- 0.208, accuracy 0.743 +/- 0.028.
+  - Counterfactual augmentation: WGA 0.338 +/- 0.078, accuracy 0.763 +/- 0.018.
+- `08_fewshot_ner` mean results:
+  - ERM: WGA 0.162 +/- 0.193, accuracy 0.725 +/- 0.014.
+  - IRM: WGA 0.241 +/- 0.251, accuracy 0.694 +/- 0.037.
+  - Counterfactual augmentation: WGA 0.266 +/- 0.215, accuracy 0.708 +/- 0.024.
+- Interpretation:
+  robust methods improve mean WGA on both sequence fixtures, but variance is
+  large. This is not enough to claim a robust sequence method yet; it does
+  justify using these fixtures as stress tests while adding stronger baselines
+  and better intervention policies.

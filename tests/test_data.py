@@ -27,3 +27,12 @@ def test_all_fixture_datasets_load() -> None:
         assert set(bundle.splits) == {"train", "val", "test"}
         assert bundle.input_dim > 0
         assert bundle.output_dim >= 2
+
+
+def test_sequence_fixture_preserves_integer_tokens() -> None:
+    bundle = load_dataset({"seed": 1, "dataset": {"kind": "text_toy", "n": 120}})
+    x = bundle.split("train")["x"]
+    assert bundle.metadata is not None
+    assert bundle.metadata["modality"] == "sequence"
+    assert float(x.max()) > 1.0
+    assert bool((x == x.long().float()).all())

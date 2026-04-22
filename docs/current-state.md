@@ -19,6 +19,10 @@ goal, not incidental development mechanics.
   - `erm`
   - `irm`
   - `counterfactual_augmentation`
+- Sequence fixtures now use integer tokens, an embedding-pooling classifier,
+  and token-specific counterfactual augmentation.
+- Seed-sweep scripts are available and have been run on `07_text_toy` and
+  `08_fewshot_ner`; robust methods improve mean WGA but with high variance.
 - Adapter stubs still intentionally remain for heavier methods:
   causal probes, beta-VAE/iVAE, CITRIS, CSML, and DeepIV.
 - Core commands:
@@ -26,24 +30,20 @@ goal, not incidental development mechanics.
   - `conda run -n orpheus python scripts/run_all_fixtures.py`
   - `conda run -n orpheus python scripts/run_method_sweep.py`
   - `conda run -n orpheus python scripts/report_best_methods.py`
+  - `conda run -n orpheus python scripts/write_research_report.py`
+  - `conda run -n orpheus python scripts/run_seed_sweep.py --match 07 --seeds 11,12,13`
+  - `conda run -n orpheus python scripts/report_seed_sweep.py --match 07`
   - `conda run -n orpheus python -m causality_experiments summarize --runs outputs/runs`
 
 ## Near-Term Plan
 
-1. Improve the text/sequence track.
-   - Replace the current float-token MLP treatment with a small embedding-based
-     sequence model.
-   - Add counterfactual token-flip augmentation that preserves causal tokens and
-     randomizes confounder tokens.
-   - Re-run `07_text_toy` and `08_fewshot_ner` sweeps.
-2. Make reports more research-friendly.
-   - Add a compact Markdown report writer that records best method per
-     experiment, key metrics, config path, and run directory.
-   - Append report highlights into `docs/research-log.md`.
-3. Start filling one adapter stub with a concrete causal probing baseline.
+1. Start filling one adapter stub with a concrete causal probing baseline.
    - Train a probe on learned hidden representations for fixture concepts.
    - Add completeness/selectivity metrics where fixture metadata supports it.
-4. Add real-data adapter documentation.
+2. Add stronger literature baselines.
+   - Group-balanced ERM or GroupDRO for known-group settings.
+   - JTT-style two-stage reweighting.
+3. Add real-data adapter documentation.
    - Specify expected local file formats for Waterbirds, dSprites/3DShapes,
      Causal3DIdent, and NER before implementing dataset-specific loaders.
 
@@ -55,6 +55,7 @@ goal, not incidental development mechanics.
 - IRM remains sensitive to penalty schedules and may need config sweeps per
   dataset.
 - ATE proxy is a rough diagnostic, not a validated causal-effect estimator.
+- Sequence WGA improvements are promising but high-variance across seeds.
 
 ## Log Hygiene
 

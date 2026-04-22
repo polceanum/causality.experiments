@@ -7,9 +7,10 @@ dataset:
 method:
   kind: erm
   hidden_dim: 48
+  embedding_dim: 16
 training:
   device: cpu
-  epochs: 15
+  epochs: 25
   batch_size: 64
   lr: 0.001
 metrics:

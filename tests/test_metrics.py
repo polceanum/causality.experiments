@@ -41,6 +41,23 @@ def test_counterfactual_augmentation_runs() -> None:
     assert 0.0 <= metrics["test/accuracy"] <= 1.0
 
 
+def test_sequence_counterfactual_augmentation_runs() -> None:
+    config = {
+        "seed": 3,
+        "dataset": {"kind": "text_toy", "n": 120},
+        "method": {
+            "kind": "counterfactual_augmentation",
+            "hidden_dim": 8,
+            "embedding_dim": 4,
+        },
+        "training": {"device": "cpu", "epochs": 1, "batch_size": 32},
+    }
+    bundle = load_dataset(config)
+    model = fit_method(bundle, config)
+    metrics = evaluate(model, bundle, config)
+    assert 0.0 <= metrics["test/accuracy"] <= 1.0
+
+
 def test_irm_runs() -> None:
     config = {
         "seed": 3,

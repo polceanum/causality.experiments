@@ -29,6 +29,19 @@ Summarize runs:
 conda run -n orpheus python -m causality_experiments summarize --runs outputs/runs
 ```
 
+Write a Markdown research report:
+
+```bash
+conda run -n orpheus python scripts/write_research_report.py
+```
+
+Run a seed sweep and report mean/std:
+
+```bash
+conda run -n orpheus python scripts/run_seed_sweep.py --match 07 --seeds 11,12,13
+conda run -n orpheus python scripts/report_seed_sweep.py --match 07
+```
+
 ## Shape of the implementation
 
 - `causality_experiments.data` provides dataset adapters and tiny generated
