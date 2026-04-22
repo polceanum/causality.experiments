@@ -4,6 +4,18 @@ Dataset-driven experiments for causal extraction via counterfactual probing
 and meta-causality. The repository starts with a lightweight harness that runs
 on the existing `orpheus` conda environment without installing new packages.
 
+## Operating constraints
+
+- Everything should run locally on the Mac notebook in the `orpheus` conda
+  environment.
+- Do not rely on paid LLM APIs, hosted model APIs, cloud processing, or external
+  services for core experiments.
+- Do not replace the existing Mac-specific PyTorch install.
+- Larger benchmark integrations should always keep a tiny local fixture path
+  and a modest smoke-test path.
+- Prefer small PyTorch models, seed sweeps, and careful metrics over
+  compute-heavy architectures that cannot run locally in a reasonable time.
+
 ## Quick start
 
 ```bash

@@ -4,6 +4,19 @@ This is the research handoff/state file. Update it after meaningful
 implementation or experiment rounds. Keep it focused on the causal-extraction
 goal, not incidental development mechanics.
 
+## Operating Constraints
+
+- All core experiments must run locally on the Mac notebook using the existing
+  `orpheus` conda environment.
+- Do not depend on paid LLM APIs, hosted model APIs, cloud jobs, or external
+  processing services.
+- Do not replace or pip-install over the Mac-specific PyTorch already present in
+  `orpheus`.
+- Any real benchmark adapter must retain a tiny local fixture and a modest
+  smoke-test path.
+- Prefer methods that can produce useful research signal through small models,
+  controlled fixtures, and seed sweeps within local compute limits.
+
 ## Current State
 
 - `main` is pushed to GitHub.
@@ -40,9 +53,12 @@ goal, not incidental development mechanics.
 1. Start filling one adapter stub with a concrete causal probing baseline.
    - Train a probe on learned hidden representations for fixture concepts.
    - Add completeness/selectivity metrics where fixture metadata supports it.
+   - Keep the probe small and local; no external model APIs.
 2. Add stronger literature baselines.
    - Group-balanced ERM or GroupDRO for known-group settings.
    - JTT-style two-stage reweighting.
+   - Implement local PyTorch versions rather than depending on heavyweight
+     external frameworks.
 3. Add real-data adapter documentation.
    - Specify expected local file formats for Waterbirds, dSprites/3DShapes,
      Causal3DIdent, and NER before implementing dataset-specific loaders.

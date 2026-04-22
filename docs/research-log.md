@@ -9,6 +9,10 @@ signals. Keep this focused on what was tried and what was learned.
   than a single fully specified algorithm. The practical research direction is
   to compare counterfactual interventions, invariance penalties, probing, and
   meta-causal generalization under shared evaluation scaffolding.
+- Set an operating constraint for the research program:
+  all core experiments must run locally on the Mac notebook in the `orpheus`
+  environment, without paid APIs, hosted model APIs, cloud processing, or
+  replacing the existing Mac-specific PyTorch install.
 - Chose a dataset-driven harness as the first implementation target:
   all 8 paper experiments are represented by runnable tiny fixtures, with
   adapter boundaries for real benchmark data.
