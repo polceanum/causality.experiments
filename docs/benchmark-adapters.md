@@ -43,6 +43,11 @@ Optional causal mask for counterfactual methods:
   preserved under counterfactual nuisance swaps.
 - Or add `dataset.causal_feature_prefixes` for grouped features, for example
   `bird_`.
+- Or set `dataset.causal_mask_strategy: label_minus_env_correlation` to derive
+  a mask from the train split by keeping features whose absolute correlation
+  with the label exceeds their absolute correlation with the environment. Use
+  `dataset.causal_mask_min_margin` and optional `dataset.causal_mask_top_k` to
+  control the selection.
 - Without this mask, methods such as `counterfactual_adversarial` are
   intentionally unavailable on real feature tables.
 
@@ -53,3 +58,14 @@ Literature comparability requirements:
 - Document the feature extractor or backbone used to create the features.
 - Only mark results as comparable when split semantics, labels, groups, and
   evaluation match the cited benchmark setup.
+
+Benchmark provenance fields:
+
+- Set `benchmark.provenance.feature_extractor` to the exact encoder or backbone
+  used to generate the local feature table.
+- Set `benchmark.provenance.feature_source` to the origin of the features,
+  such as the local export process, checkpoint, or mirror description.
+- Keep `benchmark.provenance.split_definition` aligned with the actual split
+  semantics used by the CSV.
+- If these fields are incomplete, the benchmark comparison reports now mark the
+  Waterbirds comparison as blocked even if the local CSV is present.

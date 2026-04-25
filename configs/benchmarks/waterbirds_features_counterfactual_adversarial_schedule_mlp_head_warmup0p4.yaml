@@ -1,4 +1,4 @@
-name: waterbirds_features
+name: waterbirds_features_counterfactual_adversarial_schedule_mlp_head_warmup0p4
 benchmark:
   kind: real
   id: waterbirds
@@ -21,13 +21,19 @@ dataset:
   causal_mask_min_margin: 0.01
   causal_mask_top_k: 512
 method:
-  kind: erm
+  kind: counterfactual_adversarial
   hidden_dim: 64
+  adv_weight: 0.05
+  adv_schedule: linear
+  adv_warmup_frac: 0.4
+  consistency_weight: 0.2
+  nuisance_hidden_dim: 128
+  nuisance_dropout: 0.1
 training:
   device: auto
-  epochs: 20
+  epochs: 120
   batch_size: 64
-  lr: 0.001
+  lr: 0.0003
 metrics:
 - accuracy
 - worst_group_accuracy

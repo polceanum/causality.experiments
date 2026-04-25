@@ -1,4 +1,4 @@
-name: waterbirds_features
+name: waterbirds_features_counterfactual_adversarial_dropout
 benchmark:
   kind: real
   id: waterbirds
@@ -19,15 +19,19 @@ dataset:
   path: data/waterbirds/features.csv
   causal_mask_strategy: label_minus_env_correlation
   causal_mask_min_margin: 0.01
-  causal_mask_top_k: 512
+  causal_mask_top_k: 1024
 method:
-  kind: erm
-  hidden_dim: 64
+  kind: counterfactual_adversarial
+  hidden_dim: 128
+  dropout: 0.2
+  adv_weight: 0.1
+  consistency_weight: 0.2
 training:
   device: auto
-  epochs: 20
+  epochs: 120
   batch_size: 64
-  lr: 0.001
+  lr: 0.0003
+  weight_decay: 0.0001
 metrics:
 - accuracy
 - worst_group_accuracy

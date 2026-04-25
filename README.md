@@ -68,6 +68,12 @@ Check benchmark/literature alignment:
 conda run -n orpheus python scripts/report_benchmark_alignment.py
 ```
 
+Prepare a real Waterbirds feature table from the official Stanford tarball:
+
+```bash
+conda run -n orpheus python scripts/prepare_waterbirds_features.py
+```
+
 Run a real-benchmark-compatible Waterbirds feature table:
 
 ```bash

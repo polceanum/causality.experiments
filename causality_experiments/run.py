@@ -44,6 +44,9 @@ def run_experiment(config_path: str | Path, output_root: str | Path | None = Non
 
 
 def _plot_metrics(metrics: dict[str, float], path: Path) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg", force=True)
     import matplotlib.pyplot as plt
 
     acc_items = [(k, v) for k, v in metrics.items() if k.endswith("accuracy")]
@@ -74,6 +77,18 @@ def summarize_runs(runs_dir: str | Path) -> Path:
             "benchmark_kind": payload.get("benchmark", {}).get("kind", ""),
             "literature_comparable": str(
                 payload.get("benchmark", {}).get("comparable_to_literature", False)
+            ),
+            "benchmark_provenance_complete": str(
+                payload.get("benchmark", {}).get("provenance_complete", False)
+            ),
+            "benchmark_feature_extractor": str(
+                payload.get("benchmark", {}).get("provenance", {}).get("feature_extractor", "")
+            ),
+            "benchmark_feature_source": str(
+                payload.get("benchmark", {}).get("provenance", {}).get("feature_source", "")
+            ),
+            "benchmark_split_definition": str(
+                payload.get("benchmark", {}).get("provenance", {}).get("split_definition", "")
             ),
             "config": config.get("name", ""),
             "method": config.get("method", {}).get("kind", ""),

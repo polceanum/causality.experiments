@@ -253,3 +253,125 @@ signals. Keep this focused on what was tried and what was learned.
   Waterbirds features exist, run the benchmark sweep with all applicable
   methods, then only enable counterfactual methods if the feature schema
   provides a defensible causal feature mask.
+
+## 2026-04-22: Direct Waterbirds Comparison Reporting
+
+- Upgraded `scripts/report_benchmark_alignment.py` from a coarse alignment
+  check into a direct comparison artifact.
+
+## 2026-04-23: Discovery Learner Cleanup And Failure Mode
+
+- Split discovery supervision into three categories:
+  `explicit_mask`, `derived_mask`, and `none`.
+- Marked synthetic and tiny fixtures as `explicit_mask` supervision sources.
+- Marked Waterbirds feature masks produced by
+  `label_minus_env_correlation` as `derived_mask` so the discovery learner no
+  longer treats the heuristic mask as ground truth.
+- Updated the discovery trainer to:
+  - train only on rows with `has_explicit_supervision == true`
+  - allow dataset exclusion from supervision
+  - combine pointwise BCE with a pairwise ranking loss inside each dataset
+- Added a learned-versus-heuristic overlap report for Waterbirds masks.
+- Rebuilt the discovery dataset, retrained the scorer while excluding
+  `waterbirds_features`, rescored Waterbirds, and reran the discovery-mask
+  Waterbirds benchmark.
+- Explicit-supervision training summary:
+  - rows: `28`
+  - datasets: `synthetic_linear`, `synthetic_nonlinear`, `dsprites_tiny`,
+    `causal3d_tiny`
+  - pointwise loss: about `0.348`
+  - ranking loss: about `0.012`
+  - train accuracy: about `0.786`
+- Waterbirds mask-overlap summary:
+  - heuristic size: `483`
+  - learned top-k size: `512`
+  - overlap: `205`
+  - precision vs heuristic: `0.400`
+  - recall vs heuristic: `0.424`
+  - Jaccard: `0.259`
+- Initial empirical result at that time:
+  the cleaned-up discovery learner produced test WGA `0.522` and accuracy
+  `0.882` on `waterbirds_features_counterfactual_adversarial_discovery_mask`.
+- Later correction:
+  that comparison turned out to be confounded by a downstream training
+  regression in `fit_counterfactual_adversarial()`. When `nuisance_steps == 0`,
+  the nuisance head was not optimizer-stepped on the main adversarial loss, so
+  the schedule baseline and all discovery-mask variants collapsed to the same
+  bad point.
+- Post-fix validation:
+  after restoring nuisance-head optimizer steps on the joint loss, the
+  heuristic scheduled adversarial benchmark reran to test WGA `0.687` and
+  accuracy `0.909`, while the direct learned-mask config reran to the same
+  `0.687` / `0.909` point.
+- Updated interpretation:
+  the earlier `0.522` discovery conclusion was invalid because it measured a
+  broken downstream method rather than a learned-mask failure. The current
+  learned mask is therefore unresolved on Waterbirds: it is not yet better than
+  the repaired heuristic baseline, but the post-fix direct comparison no longer
+  shows the large regression that originally motivated the failure claim.
+- The report now emits per-method Waterbirds rows with our latest WGA and
+  accuracy, literature ERM/JTT/GroupDRO/DFR reference values, and gap-to-
+  reference columns including gap to the best tracked WGA.
+- Added explicit benchmark states to the report output:
+  `real_benchmark_ready`, `fixture_only`, `blocked_missing_local_data`, and
+  `no_literature_reference`.
+- Extended the benchmark state machine so a real benchmark can also be blocked
+  on missing provenance. Waterbirds comparisons now require documented feature
+  extractor, feature source, and split definition before they are treated as
+  literature-comparable.
+- Regenerated the markdown research report so it now includes:
+  - a blocked real benchmark section,
+  - a direct comparison section for any real comparable runs,
+  - and a dedicated non-comparable development section for Waterbirds-style
+    fixture runs with per-method deltas to published references.
+- Current Waterbirds status after this change:
+  fixture methods can now be inspected against the literature gap structure in
+  one place, while the real benchmark config is reported as blocked because the
+  local feature table is still missing.
+
+## 2026-04-23: Counterfactual-Adversarial Regression Repair
+
+- Root-cause debugging of the regressed Waterbirds schedule rerun showed that
+  the controlling issue was in `fit_counterfactual_adversarial()`, not in the
+  discovery scorer or mask-construction path.
+- The bug: when `nuisance_steps == 0`, the nuisance head accumulated gradients
+  from the joint adversarial loss but never received an optimizer step, leaving
+  the adversary effectively frozen.
+- Fix applied:
+  zero the nuisance optimizer before the joint backward pass, clip nuisance-head
+  gradients alongside model gradients, and always call `nuisance_opt.step()` on
+  the main adversarial update.
+- Focused validation:
+  - pre-fix schedule rerun: test WGA `0.522`, accuracy `0.882`
+  - post-fix schedule rerun: test WGA `0.687`, accuracy `0.909`
+  - historical best stored schedule run still remains higher at test WGA
+    `0.782`, accuracy `0.917`
+- Direct discovery comparison after the fix:
+  `waterbirds_features_counterfactual_adversarial_discovery_mask` reran to the
+  same test WGA `0.687` and accuracy `0.909` as the repaired heuristic schedule
+  config.
+- Interpretation:
+  the main discovery result changed from "learned mask is much worse than the
+  heuristic" to "current direct learned-mask config is performance-matched with
+  the repaired heuristic baseline, while stronger-head schedule variants still
+  define the higher local ceiling."
+
+## 2026-04-23: Discovery Implementation Kickoff
+
+- Added a first discovery-oriented implementation slice instead of jumping
+  directly to a new downstream learner.
+- New module: `causality_experiments.discovery.build_feature_clue_rows()` emits
+  per-feature clue rows from an existing dataset bundle.
+- Current clue rows include dataset/split metadata, per-feature label and
+  environment correlation strengths, correlation margin, simple feature summary
+  statistics, and any available ground-truth or proxy structural supervision
+  already exposed by the bundle such as `causal_mask` or `cause_position`.
+- Added `scripts/build_discovery_dataset.py` to turn a config into a persisted
+  CSV artifact for the first discovery-training examples.
+- Generated the first real benchmark artifact:
+  `outputs/runs/waterbirds-feature-clues.csv`.
+- Interpretation:
+  this is the first concrete step toward learning causal discovery from clue
+  generators already present in the repo. It does not yet learn a discovery
+  model, but it creates the reusable supervision substrate needed for that next
+  step.

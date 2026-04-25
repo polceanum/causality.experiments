@@ -111,3 +111,55 @@ issues unless they invalidate an experimental result.
   - Action: treat this as a candidate method, not a result claim. Move next to
     the real local feature-table adapter and compare against published WGA under
     matching assumptions.
+
+## 2026-04-23
+
+- **Stronger nuisance adversary as a direct WGA improvement on real Waterbirds**
+  - Attempt: strengthen `counterfactual_adversarial` on the real Waterbirds
+    feature benchmark with deeper nuisance heads, later warmup, detached
+    nuisance-head updates, and lower nuisance-loss weights.
+  - Result: stronger-head variants improved representation probes, with the
+    detached-head late-warmup run reaching causal probe `0.924`, nuisance probe
+    `0.586`, and selectivity `0.338`, but its test WGA stayed lower at `0.752`
+    than the historical best simple scheduled run at `0.782`.
+  - Interpretation: stronger adversaries help suppress nuisance information,
+    but on the current setup they still trade away too much worst-group
+    performance. Better probe selectivity is not automatically a better
+    benchmark result.
+  - Correction: a later rerun of the simple scheduled variant exposed a
+    nuisance-head optimizer bug in `fit_counterfactual_adversarial()`, so the
+    comparison against the live baseline was temporarily invalid. After fixing
+    that bug, the repaired simple scheduled run recovered to `0.687` WGA and
+    `0.909` accuracy, still below the historical `0.782` run and below the best
+    stronger-head variants.
+  - Action: do not treat the simpler scheduled variant as the uncontested live
+    benchmark-facing best method. The practical frontier is now between the
+    repaired simple schedule and the stronger-head schedule variants that still
+    reach `0.752` to `0.765` WGA.
+
+- **Explicit-only discovery-mask learner as a drop-in replacement for the heuristic Waterbirds mask**
+  - Attempt: retrain the discovery scorer using only explicit supervision from
+    synthetic and tiny fixture datasets, exclude `waterbirds_features` from
+    supervision entirely, and add a pairwise ranking loss so the scorer learns
+    within-dataset feature ordering rather than only pointwise probabilities.
+  - Result: the revised learner trained on only `28` explicit rows across
+    `synthetic_linear`, `synthetic_nonlinear`, `dsprites_tiny`, and
+    `causal3d_tiny`. Its top-512 Waterbirds mask overlapped the heuristic mask
+    on `205` features, with precision `0.400`, recall `0.424`, and Jaccard
+    `0.259`. The first downstream benchmark for
+    `waterbirds_features_counterfactual_adversarial_discovery_mask` landed at
+    test WGA `0.522` and accuracy `0.882`.
+  - Correction: that `0.522` result was later invalidated as a discovery
+    failure because the shared counterfactual-adversarial trainer had a frozen
+    nuisance-head bug. After fixing the optimizer path, the direct learned-mask
+    benchmark reran to test WGA `0.687` and accuracy `0.909`, exactly matching
+    the repaired heuristic schedule baseline.
+  - Interpretation: removing heuristic self-distillation fixed the supervision
+    story, but the current evidence still does not show a learned-mask win over
+    the repaired heuristic baseline. What failed was the earlier conclusion,
+    not necessarily the learned-mask idea itself.
+  - Action: do not keep citing the pre-fix `0.522` run as evidence against the
+    learned mask. Future discovery work should compare against the repaired
+    baseline and the stronger-head schedule variants, and should keep using
+    richer clue targets or structured ranking objectives tied to downstream
+    intervention quality.

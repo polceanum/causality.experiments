@@ -82,6 +82,18 @@ goal, not incidental development mechanics.
   is a synthetic/local fixture or a real literature-comparable benchmark.
 - A local Waterbirds feature-table adapter is available as the first
   literature-aligned benchmark path.
+- Benchmark reporting now has a direct comparison view. The alignment report
+  shows our latest benchmark-aligned rows next to Waterbirds ERM, JTT,
+  GroupDRO, and DFR references, plus delta-to-reference columns and explicit
+  statuses such as `fixture_only` and `blocked_missing_local_data`.
+- The real-benchmark status now also checks benchmark provenance. A local CSV is
+  not enough by itself; the Waterbirds config must document feature extractor,
+  feature source, and split semantics before the repo treats the comparison as
+  benchmark-ready.
+- The markdown research report now separates blocked real benchmark configs,
+  real literature-comparable runs, and literature-aligned fixture runs. The
+  current Waterbirds fixture gets a development-only per-method delta table
+  against the published references.
 
 ## Near-Term Plan
 
@@ -114,6 +126,10 @@ goal, not incidental development mechanics.
   should continue showing both.
 - Fixture wins can be misleadingly high; compare to SOTA only on real benchmark
   adapters with matching assumptions.
+- The real Waterbirds comparison remains blocked on this machine until
+  `data/waterbirds/features.csv` exists locally.
+- Even after the local CSV exists, the benchmark report will still block the
+  comparison until the Waterbirds provenance fields are filled in.
 
 ## Log Hygiene
 

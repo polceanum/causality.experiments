@@ -194,6 +194,8 @@ cython_debug/
 # Causality experiment outputs and generated fixture mirrors
 outputs/
 data/fixtures/
+data/downloads/
+data/waterbirds/
 
 # PyPI configuration file
 .pypirc

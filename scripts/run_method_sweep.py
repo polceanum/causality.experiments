@@ -19,12 +19,27 @@ from causality_experiments.run import run_experiment
 METHODS = (
     {"kind": "erm"},
     {"kind": "group_balanced_erm"},
-    {"kind": "group_dro", "dro_eta": 0.1},
+    {
+        "kind": "group_dro",
+        "dro_eta": 0.05,
+        "training": {"epochs": 120, "lr": 3e-4},
+    },
     {"kind": "irm", "penalty_weight": 1.0, "anneal_epochs": 5},
     {"kind": "jtt", "upweight": 5.0},
     {"kind": "adversarial_probe", "adv_weight": 0.05},
-    {"kind": "counterfactual_adversarial", "adv_weight": 0.05, "consistency_weight": 0.2},
-    {"kind": "counterfactual_augmentation", "consistency_weight": 0.2},
+    {
+        "kind": "counterfactual_adversarial",
+        "adv_weight": 0.05,
+        "adv_schedule": "linear",
+        "adv_warmup_frac": 0.3,
+        "consistency_weight": 0.2,
+        "training": {"epochs": 120, "lr": 3e-4},
+    },
+    {
+        "kind": "counterfactual_augmentation",
+        "consistency_weight": 0.2,
+        "training": {"epochs": 120, "lr": 3e-4},
+    },
 )
 
 
@@ -45,6 +60,12 @@ def main() -> None:
         "--match",
         default="",
         help="Only run configs whose filename or config name contains this text.",
+    )
+    parser.add_argument(
+        "--method",
+        action="append",
+        default=[],
+        help="Only run methods whose kind matches one of these values. Can be passed multiple times.",
     )
     parser.add_argument(
         "--skip-incompatible",
@@ -74,6 +95,8 @@ def main() -> None:
             base = load_config(config_path)
             hidden_dim = int(base.get("method", {}).get("hidden_dim", 64))
             for method in METHODS:
+                if args.method and method["kind"] not in set(args.method):
+                    continue
                 if (
                     args.skip_incompatible
                     and _requires_causal_mask(method)
@@ -83,14 +106,17 @@ def main() -> None:
                     continue
                 config = deepcopy(base)
                 config["name"] = f"{base['name']}_{method['kind']}"
-                config["method"] = {**method, "hidden_dim": hidden_dim}
+                method_config = {key: value for key, value in method.items() if key != "training"}
+                config["method"] = {**method_config, "hidden_dim": hidden_dim}
                 config.setdefault("training", {})
+                config["training"] = {**config["training"], **dict(method.get("training", {}))}
                 if method["kind"] in {
                     "irm",
                     "group_dro",
                     "jtt",
                     "adversarial_probe",
                     "counterfactual_adversarial",
+                    "counterfactual_augmentation",
                 }:
                     config["training"]["epochs"] = max(int(config["training"].get("epochs", 15)), 60)
                 if args.dry_run:
@@ -121,7 +147,12 @@ def _config_has_causal_mask(config: dict[str, object]) -> bool:
     }
     if dataset.get("kind") in fixture_kinds:
         return True
-    return bool(dataset.get("causal_feature_columns") or dataset.get("causal_feature_prefixes"))
+    strategy = str(dataset.get("causal_mask_strategy", "")).strip().lower()
+    return bool(
+        dataset.get("causal_feature_columns")
+        or dataset.get("causal_feature_prefixes")
+        or strategy == "label_minus_env_correlation"
+    )
 
 
 if __name__ == "__main__":

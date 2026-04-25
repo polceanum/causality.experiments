@@ -60,14 +60,31 @@ class OracleMaskModel:
 
 
 class MLP(nn.Module):
-    def __init__(self, input_dim: int, output_dim: int, hidden_dim: int = 64) -> None:
+    def __init__(
+        self,
+        input_dim: int,
+        output_dim: int,
+        hidden_dim: int = 64,
+        dropout: float = 0.0,
+    ) -> None:
         super().__init__()
-        self.net = nn.Sequential(
+        layers: list[nn.Module] = [
             nn.Linear(input_dim, hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, output_dim),
+        ]
+        if dropout > 0:
+            layers.append(nn.Dropout(p=dropout))
+        layers.extend(
+            [
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.ReLU(),
+            ]
+        )
+        if dropout > 0:
+            layers.append(nn.Dropout(p=dropout))
+        layers.append(nn.Linear(hidden_dim, output_dim))
+        self.net = nn.Sequential(
+            *layers,
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -118,6 +135,54 @@ class _GradientReverse(torch.autograd.Function):
 
 def _grad_reverse(x: torch.Tensor, weight: float) -> torch.Tensor:
     return _GradientReverse.apply(x, weight)
+
+
+def _scheduled_adv_weight(
+    base_weight: float,
+    *,
+    epoch_idx: int,
+    total_epochs: int,
+    schedule: str,
+    warmup_frac: float,
+) -> float:
+    if base_weight <= 0:
+        return 0.0
+    if total_epochs <= 1:
+        return base_weight
+    schedule_name = schedule.strip().lower()
+    if not schedule_name or schedule_name == "constant":
+        return base_weight
+
+    progress = epoch_idx / max(total_epochs - 1, 1)
+    warmup = min(max(warmup_frac, 0.0), 0.95)
+    if progress <= warmup:
+        scaled = 0.0
+    else:
+        scaled = (progress - warmup) / max(1.0 - warmup, 1e-12)
+
+    if schedule_name == "linear":
+        return base_weight * min(max(scaled, 0.0), 1.0)
+    raise ValueError(f"Unknown adversarial schedule {schedule!r}.")
+
+
+def _make_nuisance_head(
+    repr_dim: int,
+    output_dim: int,
+    method: dict[str, Any],
+) -> nn.Module:
+    hidden_dim = int(method.get("nuisance_hidden_dim", 0))
+    dropout = float(method.get("nuisance_dropout", 0.0))
+    if hidden_dim <= 0:
+        return nn.Linear(repr_dim, output_dim)
+
+    layers: list[nn.Module] = [
+        nn.Linear(repr_dim, hidden_dim),
+        nn.ReLU(),
+    ]
+    if dropout > 0:
+        layers.append(nn.Dropout(p=dropout))
+    layers.append(nn.Linear(hidden_dim, output_dim))
+    return nn.Sequential(*layers)
 
 
 @dataclass
@@ -171,6 +236,7 @@ def _make_model(bundle: DatasetBundle, method: dict[str, Any]) -> nn.Module:
         bundle.input_dim,
         bundle.output_dim,
         hidden_dim=int(method.get("hidden_dim", 64)),
+        dropout=float(method.get("dropout", 0.0)),
     )
 
 
@@ -228,6 +294,23 @@ def _fit_minibatch_classifier(
     *,
     balanced_groups: bool = False,
 ) -> TorchClassifier:
+    train = bundle.split("train")
+    indices = torch.arange(len(train["y"]))
+    return _fit_minibatch_classifier_subset(
+        bundle,
+        config,
+        indices,
+        balanced_groups=balanced_groups,
+    )
+
+
+def _fit_minibatch_classifier_subset(
+    bundle: DatasetBundle,
+    config: dict[str, Any],
+    indices: torch.Tensor,
+    *,
+    balanced_groups: bool = False,
+) -> TorchClassifier:
     method = dict(config.get("method", {}))
     training = dict(config.get("training", {}))
     seed = int(config.get("seed", 0))
@@ -235,10 +318,12 @@ def _fit_minibatch_classifier(
     device = _device(str(training.get("device", "auto")))
     model = _make_model(bundle, method).to(device)
     train = bundle.split("train")
-    dataset = TensorDataset(train["x"], train["y"])
+    x = train["x"][indices]
+    y = train["y"][indices]
+    dataset = TensorDataset(x, y)
     generator = torch.Generator().manual_seed(seed)
     if balanced_groups:
-        groups = train["group"]
+        groups = train["group"][indices]
         counts = torch.bincount(groups)
         weights = 1.0 / counts.clamp_min(1).float()[groups]
         sampler = WeightedRandomSampler(
@@ -329,15 +414,29 @@ def fit_jtt(bundle: DatasetBundle, config: dict[str, Any]) -> TorchClassifier:
     training = dict(config.get("training", {}))
     seed = int(config.get("seed", 0))
     stage1_epochs = int(method.get("stage1_epochs", max(1, int(training.get("epochs", 20)) // 3)))
+    jtt_folds = max(2, int(method.get("jtt_folds", 4)))
     upweight = float(method.get("upweight", 5.0))
     stage1_config = {
         **config,
         "training": {**training, "epochs": stage1_epochs},
     }
-    stage1 = _fit_minibatch_classifier(bundle, stage1_config, balanced_groups=False)
     train = bundle.split("train")
-    with torch.no_grad():
-        pred = stage1.predict(train["x"]).argmax(dim=1)
+    train_size = len(train["y"])
+    fold_count = min(jtt_folds, train_size)
+    permutation = torch.randperm(train_size, generator=torch.Generator().manual_seed(seed))
+    fold_ids = torch.arange(train_size) % fold_count
+    pred = torch.empty(train_size, dtype=torch.long)
+    for fold in range(fold_count):
+        holdout_idx = permutation[fold_ids == fold]
+        fit_idx = permutation[fold_ids != fold]
+        stage1 = _fit_minibatch_classifier_subset(
+            bundle,
+            stage1_config,
+            fit_idx,
+            balanced_groups=False,
+        )
+        with torch.no_grad():
+            pred[holdout_idx] = stage1.predict(train["x"][holdout_idx]).argmax(dim=1).cpu()
     weights = torch.ones(len(pred), dtype=torch.float32)
     weights[pred != train["y"]] = upweight
 
@@ -393,7 +492,7 @@ def fit_adversarial_probe(bundle: DatasetBundle, config: dict[str, Any]) -> Torc
     )
     env_dim = int(train["env"].max().item()) + 1
     repr_dim = int(model.encode(train["x"][:1].to(device)).shape[1])
-    nuisance_head = nn.Linear(repr_dim, env_dim).to(device)
+    nuisance_head = _make_nuisance_head(repr_dim, env_dim, method).to(device)
     opt = torch.optim.Adam(
         list(model.parameters()) + list(nuisance_head.parameters()),
         lr=float(training.get("lr", 1e-3)),
@@ -401,6 +500,7 @@ def fit_adversarial_probe(bundle: DatasetBundle, config: dict[str, Any]) -> Torc
     )
     epochs = int(training.get("epochs", 30))
     adv_weight = float(method.get("adv_weight", 0.2))
+    nuisance_loss_weight = float(method.get("nuisance_loss_weight", 1.0))
     clip_grad = float(training.get("clip_grad", 1.0))
     for _ in range(epochs):
         model.train()
@@ -413,7 +513,7 @@ def fit_adversarial_probe(bundle: DatasetBundle, config: dict[str, Any]) -> Torc
             z = model.encode(xb)
             label_loss = F.cross_entropy(model(xb), yb)
             nuisance_loss = F.cross_entropy(nuisance_head(_grad_reverse(z, adv_weight)), envb)
-            loss = label_loss + nuisance_loss
+            loss = label_loss + nuisance_loss_weight * nuisance_loss
             loss.backward()
             if clip_grad > 0:
                 nn.utils.clip_grad_norm_(
@@ -440,6 +540,23 @@ def _counterfactual_batch(bundle: DatasetBundle, xb: torch.Tensor) -> torch.Tens
     return xb * causal_mask + xb[perm] * nuisance_mask
 
 
+def _apply_causal_input_gate(
+    bundle: DatasetBundle,
+    xb: torch.Tensor,
+    method: dict[str, Any],
+) -> torch.Tensor:
+    if bundle.causal_mask is None or _is_sequence(bundle):
+        return xb
+    nuisance_input_weight = float(method.get("nuisance_input_weight", 1.0))
+    causal_input_weight = float(method.get("causal_input_weight", 1.0))
+    if causal_input_weight == 1.0 and nuisance_input_weight == 1.0:
+        return xb
+    causal_mask = bundle.causal_mask.to(xb.device)
+    nuisance_mask = 1.0 - causal_mask
+    gate = causal_input_weight * causal_mask + nuisance_input_weight * nuisance_mask
+    return xb * gate
+
+
 def fit_counterfactual_adversarial(bundle: DatasetBundle, config: dict[str, Any]) -> TorchClassifier:
     if bundle.causal_mask is None:
         raise ValueError("Counterfactual adversarial training requires dataset.causal_mask.")
@@ -459,39 +576,68 @@ def fit_counterfactual_adversarial(bundle: DatasetBundle, config: dict[str, Any]
     )
     env_dim = int(train["env"].max().item()) + 1
     repr_dim = int(model.encode(train["x"][:1].to(device)).shape[1])
-    nuisance_head = nn.Linear(repr_dim, env_dim).to(device)
-    opt = torch.optim.Adam(
-        list(model.parameters()) + list(nuisance_head.parameters()),
+    nuisance_head = _make_nuisance_head(repr_dim, env_dim, method).to(device)
+    model_opt = torch.optim.Adam(
+        model.parameters(),
         lr=float(training.get("lr", 1e-3)),
+        weight_decay=float(training.get("weight_decay", 0.0)),
+    )
+    nuisance_steps = max(0, int(method.get("nuisance_steps", 0)))
+    nuisance_lr_scale = float(method.get("nuisance_lr_scale", 1.0))
+    nuisance_opt = torch.optim.Adam(
+        nuisance_head.parameters(),
+        lr=float(training.get("lr", 1e-3)) * nuisance_lr_scale,
         weight_decay=float(training.get("weight_decay", 0.0)),
     )
     epochs = int(training.get("epochs", 30))
     adv_weight = float(method.get("adv_weight", 0.05))
+    adv_schedule = str(method.get("adv_schedule", "constant"))
+    adv_warmup_frac = float(method.get("adv_warmup_frac", 0.0))
+    nuisance_loss_weight = float(method.get("nuisance_loss_weight", 1.0))
     consistency_weight = float(method.get("consistency_weight", 0.2))
     clip_grad = float(training.get("clip_grad", 1.0))
-    for _ in range(epochs):
+    for epoch_idx in range(epochs):
         model.train()
         nuisance_head.train()
+        scheduled_adv_weight = _scheduled_adv_weight(
+            adv_weight,
+            epoch_idx=epoch_idx,
+            total_epochs=epochs,
+            schedule=adv_schedule,
+            warmup_frac=adv_warmup_frac,
+        )
         for xb, yb, envb in loader:
             xb = xb.to(device)
             yb = yb.to(device)
             envb = envb.to(device)
             x_cf = _counterfactual_batch(bundle, xb)
-            opt.zero_grad(set_to_none=True)
-            logits = model(xb)
-            cf_logits = model(x_cf)
-            z = model.encode(xb)
+            x_main = _apply_causal_input_gate(bundle, xb, method)
+            x_cf_main = _apply_causal_input_gate(bundle, x_cf, method)
+            if nuisance_steps > 0:
+                for _ in range(nuisance_steps):
+                    nuisance_opt.zero_grad(set_to_none=True)
+                    z_detached = model.encode(x_main).detach()
+                    nuisance_train_loss = F.cross_entropy(nuisance_head(z_detached), envb)
+                    nuisance_train_loss.backward()
+                    if clip_grad > 0:
+                        nn.utils.clip_grad_norm_(list(nuisance_head.parameters()), clip_grad)
+                    nuisance_opt.step()
+
+            model_opt.zero_grad(set_to_none=True)
+            nuisance_opt.zero_grad(set_to_none=True)
+            logits = model(x_main)
+            cf_logits = model(x_cf_main)
+            z = model.encode(x_main)
             label_loss = F.cross_entropy(logits, yb) + F.cross_entropy(cf_logits, yb)
             consistency = F.mse_loss(F.softmax(logits, dim=1), F.softmax(cf_logits, dim=1))
-            nuisance_loss = F.cross_entropy(nuisance_head(_grad_reverse(z, adv_weight)), envb)
-            loss = label_loss + consistency_weight * consistency + nuisance_loss
+            nuisance_loss = F.cross_entropy(nuisance_head(_grad_reverse(z, scheduled_adv_weight)), envb)
+            loss = label_loss + consistency_weight * consistency + nuisance_loss_weight * nuisance_loss
             loss.backward()
             if clip_grad > 0:
-                nn.utils.clip_grad_norm_(
-                    list(model.parameters()) + list(nuisance_head.parameters()),
-                    clip_grad,
-                )
-            opt.step()
+                nn.utils.clip_grad_norm_(list(model.parameters()), clip_grad)
+                nn.utils.clip_grad_norm_(list(nuisance_head.parameters()), clip_grad)
+            model_opt.step()
+            nuisance_opt.step()
     return TorchClassifier(model, device)
 
 
@@ -528,9 +674,11 @@ def fit_counterfactual_augmentation(bundle: DatasetBundle, config: dict[str, Any
             xb = xb.to(device)
             yb = yb.to(device)
             x_cf = _counterfactual_batch(bundle, xb)
+            x_main = _apply_causal_input_gate(bundle, xb, method)
+            x_cf_main = _apply_causal_input_gate(bundle, x_cf, method)
             opt.zero_grad(set_to_none=True)
-            logits = model(xb)
-            cf_logits = model(x_cf)
+            logits = model(x_main)
+            cf_logits = model(x_cf_main)
             label_loss = F.cross_entropy(logits, yb) + F.cross_entropy(cf_logits, yb)
             consistency = F.mse_loss(F.softmax(logits, dim=1), F.softmax(cf_logits, dim=1))
             loss = label_loss + consistency_weight * consistency
