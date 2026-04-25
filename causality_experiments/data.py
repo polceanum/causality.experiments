@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import csv
 from pathlib import Path
 from typing import Any, Callable
 
@@ -92,7 +93,11 @@ def _spurious_tabular(config: dict[str, Any], *, nonlinear: bool = False) -> Dat
         env,
         group,
         np.array([1.0, 0.0], dtype=np.float32),
-        {"causal_features": ["x1"], "spurious_features": ["x2"]},
+        {
+            "causal_features": ["x1"],
+            "spurious_features": ["x2"],
+            "causal_supervision": "explicit_mask",
+        },
     )
 
 
@@ -114,7 +119,11 @@ def _factor_fixture(config: dict[str, Any], name: str, factors: int = 6) -> Data
         env,
         group,
         causal_mask,
-        {"factors": [f"z{i}" for i in range(factors)], "fixture": True},
+        {
+            "factors": [f"z{i}" for i in range(factors)],
+            "fixture": True,
+            "causal_supervision": "explicit_mask",
+        },
     )
 
 
@@ -134,7 +143,11 @@ def _waterbirds_fixture(config: dict[str, Any]) -> DatasetBundle:
         env,
         group,
         np.array([1.0, 0.0, 0, 0, 0, 0, 0, 0], dtype=np.float32),
-        {"labels": ["landbird", "waterbird"], "fixture": True},
+        {
+            "labels": ["landbird", "waterbird"],
+            "fixture": True,
+            "causal_supervision": "explicit_mask",
+        },
     )
 
 
@@ -165,6 +178,7 @@ def _sequence_fixture(config: dict[str, Any], name: str, ner: bool = False) -> D
             "fixture": True,
             "modality": "sequence",
             "vocab_size": 12,
+            "causal_supervision": "explicit_mask",
         },
     )
 
@@ -221,7 +235,14 @@ def _waterbirds_features(config: dict[str, Any]) -> DatasetBundle:
         ]
     if not feature_cols:
         raise ValueError("Waterbirds feature adapter could not infer any numeric feature columns.")
-    causal_mask = _feature_causal_mask(feature_cols, config)
+    causal_mask = _feature_causal_mask(
+        frame,
+        feature_cols,
+        config,
+        split_col=split_col,
+        label_col=label_col,
+        env_col=env_col,
+    )
 
     splits: dict[str, dict[str, torch.Tensor]] = {}
     for split_name in ("train", "val", "test"):
@@ -252,6 +273,12 @@ def _waterbirds_features(config: dict[str, Any]) -> DatasetBundle:
             "modality": "features",
             "source_path": str(path),
             "feature_columns": feature_cols,
+            "causal_mask_strategy": str(config.get("causal_mask_strategy", "")).strip(),
+            "causal_supervision": "explicit_mask"
+            if config.get("causal_feature_columns") or config.get("causal_feature_prefixes")
+            else "derived_mask"
+            if causal_mask is not None
+            else "none",
             "causal_feature_columns": [
                 col
                 for col, keep in zip(feature_cols, causal_mask.tolist(), strict=True)
@@ -266,19 +293,78 @@ def _waterbirds_features(config: dict[str, Any]) -> DatasetBundle:
     )
 
 
-def _feature_causal_mask(feature_cols: list[str], config: dict[str, Any]) -> torch.Tensor | None:
+def _feature_causal_mask(
+    frame: Any,
+    feature_cols: list[str],
+    config: dict[str, Any],
+    *,
+    split_col: str,
+    label_col: str,
+    env_col: str,
+) -> torch.Tensor | None:
     explicit = set(str(col) for col in config.get("causal_feature_columns", []) or [])
     prefixes = tuple(str(prefix) for prefix in config.get("causal_feature_prefixes", []) or [])
-    if not explicit and not prefixes:
+    strategy = str(config.get("causal_mask_strategy", "")).strip().lower()
+    if explicit or prefixes:
+        values = [
+            1.0 if col in explicit or col.startswith(prefixes) else 0.0
+            for col in feature_cols
+        ]
+    elif strategy == "label_minus_env_correlation":
+        train = frame[frame[split_col].astype(str).str.lower() == "train"]
+        if train.empty:
+            raise ValueError("Waterbirds feature adapter requires a non-empty train split to derive a causal mask.")
+        label_scores = train[feature_cols].corrwith(train[label_col]).abs().fillna(0.0)
+        env_scores = train[feature_cols].corrwith(train[env_col]).abs().fillna(0.0)
+        margins = label_scores - env_scores
+        min_margin = float(config.get("causal_mask_min_margin", 0.0))
+        top_k = int(config.get("causal_mask_top_k", 0) or 0)
+        selected = margins >= min_margin
+        if top_k > 0:
+            top_features = set(margins.sort_values(ascending=False).head(top_k).index)
+            values = [1.0 if col in top_features and selected.get(col, False) else 0.0 for col in feature_cols]
+        else:
+            values = [1.0 if selected.get(col, False) else 0.0 for col in feature_cols]
+    elif strategy == "discovery_scores":
+        score_path = Path(str(config.get("discovery_scores_path", "")).strip()).expanduser()
+        if not str(score_path):
+            raise ValueError("discovery_scores mask strategy requires dataset.discovery_scores_path.")
+        if not score_path.exists():
+            raise FileNotFoundError(f"Discovery score file not found: {score_path}")
+        score_map: dict[str, float] = {}
+        with score_path.open("r", encoding="utf-8", newline="") as handle:
+            for row in csv.DictReader(handle):
+                feature_name = str(row.get("feature_name", "")).strip()
+                score = str(row.get("score", "")).strip()
+                if feature_name and score:
+                    score_map[feature_name] = float(score)
+        threshold = float(config.get("discovery_score_threshold", 0.5))
+        top_k = int(config.get("discovery_score_top_k", 0) or 0)
+        selected_names = {name for name, score in score_map.items() if score >= threshold}
+        if top_k > 0:
+            ranked = sorted(score_map.items(), key=lambda item: item[1], reverse=True)[:top_k]
+            selected_names.update(name for name, _ in ranked)
+        values = [1.0 if col in selected_names else 0.0 for col in feature_cols]
+    elif strategy == "random_top_k":
+        top_k = int(config.get("causal_mask_top_k", 0) or 0)
+        if top_k <= 0:
+            raise ValueError("random_top_k mask strategy requires dataset.causal_mask_top_k > 0.")
+        seed = int(config.get("causal_mask_random_seed", 0))
+        count = min(top_k, len(feature_cols))
+        generator = np.random.default_rng(seed)
+        chosen = set(generator.choice(feature_cols, size=count, replace=False).tolist())
+        values = [1.0 if col in chosen else 0.0 for col in feature_cols]
+    elif not strategy:
         return None
-    values = [
-        1.0 if col in explicit or col.startswith(prefixes) else 0.0
-        for col in feature_cols
-    ]
+    else:
+        raise ValueError(
+            "Unknown Waterbirds feature adapter causal mask strategy "
+            f"{strategy!r}."
+        )
     if not any(values):
         raise ValueError(
             "Waterbirds feature adapter causal mask selected no feature columns. "
-            "Check causal_feature_columns or causal_feature_prefixes."
+            "Check causal_feature_columns, causal_feature_prefixes, or the derived-mask thresholds."
         )
     return torch.tensor(values, dtype=torch.float32)
 
