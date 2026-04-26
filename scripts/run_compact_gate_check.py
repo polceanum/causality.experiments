@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
 
 from causality_experiments.config import load_config
 from causality_experiments.run import run_experiment
+from scripts.run_instability_jtt_sweep import _promotion_decision
 from scripts.tune_discovery_mask import _build_candidate
 
 
@@ -42,6 +43,13 @@ def _specs(
             "top_k": top_k,
         },
         {
+            "label": f"fixed_instability_jtt_discovery_top{top_k}",
+            "base": "configs/benchmarks/waterbirds_features_counterfactual_adversarial_schedule_fixed_instability_jtt_gated_nuisance0p9.yaml",
+            "variant": "discovery_full",
+            "score_path": full_scores,
+            "top_k": top_k,
+        },
+        {
             "label": f"learned_discovery_top{top_k}",
             "base": "configs/benchmarks/waterbirds_features_counterfactual_adversarial_schedule_learned_gate_nuisance0p9.yaml",
             "variant": "discovery_full",
@@ -58,6 +66,83 @@ def _specs(
         {
             "label": f"grouped_scored_discovery_top{top_k}",
             "base": "configs/benchmarks/waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_scored_gate_nuisance0p9.yaml",
+            "variant": "discovery_full",
+            "score_path": full_scores,
+            "top_k": top_k,
+        },
+        {
+            "label": f"grouped_conditioned_discovery_top{top_k}",
+            "base": "configs/benchmarks/waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_conditioned_gate_nuisance0p9.yaml",
+            "variant": "discovery_full",
+            "score_path": full_scores,
+            "top_k": top_k,
+        },
+        {
+            "label": f"grouped_contextual_discovery_top{top_k}",
+            "base": "configs/benchmarks/waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_contextual_gate_nuisance0p9.yaml",
+            "variant": "discovery_full",
+            "score_path": full_scores,
+            "top_k": top_k,
+        },
+        {
+            "label": f"grouped_representation_discovery_top{top_k}",
+            "base": "configs/benchmarks/waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_representation_gate_nuisance0p9.yaml",
+            "variant": "discovery_full",
+            "score_path": full_scores,
+            "top_k": top_k,
+        },
+        {
+            "label": f"grouped_disagreement_discovery_top{top_k}",
+            "base": "configs/benchmarks/waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_disagreement_gate_nuisance0p9.yaml",
+            "variant": "discovery_full",
+            "score_path": full_scores,
+            "top_k": top_k,
+        },
+        {
+            "label": f"grouped_replay_discovery_top{top_k}",
+            "base": "configs/benchmarks/waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_replay_gate_nuisance0p9.yaml",
+            "variant": "discovery_full",
+            "score_path": full_scores,
+            "top_k": top_k,
+        },
+        {
+            "label": f"grouped_instability_jtt_discovery_top{top_k}",
+            "base": "configs/benchmarks/waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_instability_jtt_gate_nuisance0p9.yaml",
+            "variant": "discovery_full",
+            "score_path": full_scores,
+            "top_k": top_k,
+        },
+        {
+            "label": f"grouped_stable_instability_jtt_discovery_top{top_k}",
+            "base": "configs/benchmarks/waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_stable_instability_jtt_gate_nuisance0p9.yaml",
+            "variant": "discovery_full",
+            "score_path": full_scores,
+            "top_k": top_k,
+        },
+        {
+            "label": f"grouped_loss_weighted_instability_jtt_discovery_top{top_k}",
+            "base": "configs/benchmarks/waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_loss_weighted_instability_jtt_gate_nuisance0p9.yaml",
+            "variant": "discovery_full",
+            "score_path": full_scores,
+            "top_k": top_k,
+        },
+        {
+            "label": f"grouped_loss_delta_instability_jtt_discovery_top{top_k}",
+            "base": "configs/benchmarks/waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_loss_delta_instability_jtt_gate_nuisance0p9.yaml",
+            "variant": "discovery_full",
+            "score_path": full_scores,
+            "top_k": top_k,
+        },
+        {
+            "label": f"grouped_group_loss_delta_instability_jtt_discovery_top{top_k}",
+            "base": "configs/benchmarks/waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_group_loss_delta_instability_jtt_gate_nuisance0p9.yaml",
+            "variant": "discovery_full",
+            "score_path": full_scores,
+            "top_k": top_k,
+        },
+        {
+            "label": f"grouped_group_failure_instability_jtt_discovery_top{top_k}",
+            "base": "configs/benchmarks/waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_group_failure_instability_jtt_gate_nuisance0p9.yaml",
             "variant": "discovery_full",
             "score_path": full_scores,
             "top_k": top_k,
@@ -135,6 +220,9 @@ def main() -> None:
         default="outputs/runs/waterbirds-learned-gate-compact-check.csv",
         help="CSV path for compact comparison results.",
     )
+    parser.add_argument("--promotion-min-test-wga", type=float, default=0.68)
+    parser.add_argument("--promotion-min-val-wga", type=float, default=0.68)
+    parser.add_argument("--promotion-max-test-val-gap", type=float, default=0.03)
     args = parser.parse_args()
 
     rows: list[dict[str, str | float]] = []
@@ -168,15 +256,26 @@ def main() -> None:
         run_dir = run_experiment(tmp_config)
         payload = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
         metrics = payload["metrics"]
+        test_wga = float(metrics["test/worst_group_accuracy"])
+        val_wga = float(metrics["val/worst_group_accuracy"])
+        eligible, promotion_score = _promotion_decision(
+            test_wga=test_wga,
+            val_wga=val_wga,
+            min_test_wga=args.promotion_min_test_wga,
+            min_val_wga=args.promotion_min_val_wga,
+            max_test_val_gap=args.promotion_max_test_val_gap,
+        )
         rows.append(
             {
                 "label": str(spec["label"]),
                 "run": run_dir.name,
                 "config": config["name"],
-                "test_wga": float(metrics["test/worst_group_accuracy"]),
-                "val_wga": float(metrics["val/worst_group_accuracy"]),
+                "test_wga": test_wga,
+                "val_wga": val_wga,
                 "test_acc": float(metrics["test/accuracy"]),
                 "val_acc": float(metrics["val/accuracy"]),
+                "promotion_score": promotion_score,
+                "eligible_for_promotion": int(eligible),
             }
         )
 

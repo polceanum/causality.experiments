@@ -97,6 +97,17 @@ def _format_metric(row: dict[str, str], key: str) -> str:
     return f"{value:.3f}"
 
 
+def _latest_by_config(rows: list[dict[str, str]]) -> dict[str, dict[str, str]]:
+    latest: dict[str, dict[str, str]] = {}
+    for row in rows:
+        config_name = row.get("config", "")
+        if not config_name:
+            continue
+        if config_name not in latest or row.get("run", "") > latest[config_name].get("run", ""):
+            latest[config_name] = row
+    return latest
+
+
 def _dataset_path_exists(experiment: str) -> bool | None:
     config_path = Path("configs/benchmarks") / f"{experiment}.yaml"
     if not config_path.exists():
@@ -149,6 +160,7 @@ def main() -> None:
         key = (_experiment_name(config_name), row.get("method", ""))
         if key not in latest or row.get("run", "") > latest[key].get("run", ""):
             latest[key] = row
+    latest_config = _latest_by_config(rows)
     grouped: dict[str, list[dict[str, str]]] = defaultdict(list)
     for row in latest.values():
         method = row.get("method", "")
@@ -258,6 +270,138 @@ def main() -> None:
                 )
                 + " |"
             )
+
+    gate_control_rows = [
+        ("fixed_discovery_top128", "waterbirds_features_counterfactual_adversarial_schedule_gated_nuisance0p9_discovery_full_top128"),
+        ("fixed_instability_jtt_top128", "waterbirds_features_counterfactual_adversarial_schedule_fixed_instability_jtt_gated_nuisance0p9_discovery_full_top128"),
+        ("fixed_random_top128", "waterbirds_features_counterfactual_adversarial_schedule_gated_nuisance0p9_random_top128"),
+        ("fixed_random_top512", "waterbirds_features_counterfactual_adversarial_schedule_gated_nuisance0p9_random_top512"),
+        ("grouped_discovery_top128", "waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_gate_nuisance0p9_discovery_full_top128"),
+        ("grouped_instability_jtt_top128", "waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_instability_jtt_gate_nuisance0p9_discovery_full_top128"),
+        ("grouped_heuristic_top128", "waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_gate_nuisance0p9_heuristic_top128"),
+        ("grouped_random_top128", "waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_gate_nuisance0p9_random_top128"),
+    ]
+    available_gate_rows = [(label, latest_config[name]) for label, name in gate_control_rows if name in latest_config]
+    if available_gate_rows:
+        lines.extend(["", "## Waterbirds Gate Controls", "", "Latest full-budget matched-control rows for the gated and grouped-gate Waterbirds variants.", "", "| Variant | Test WGA | Test Acc | Val WGA | Run |", "| --- | ---: | ---: | ---: | --- |"])
+        for label, row in available_gate_rows:
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        label,
+                        _format_metric(row, "test/worst_group_accuracy"),
+                        _format_metric(row, "test/accuracy"),
+                        _format_metric(row, "val/worst_group_accuracy"),
+                        row.get("run", ""),
+                    ]
+                )
+                + " |"
+            )
+        discovery_row = latest_config.get("waterbirds_features_counterfactual_adversarial_schedule_gated_nuisance0p9_discovery_full_top128")
+        fixed_random_row = latest_config.get("waterbirds_features_counterfactual_adversarial_schedule_gated_nuisance0p9_random_top512")
+        fixed_instability_row = latest_config.get("waterbirds_features_counterfactual_adversarial_schedule_fixed_instability_jtt_gated_nuisance0p9_discovery_full_top128")
+        grouped_discovery_row = latest_config.get("waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_gate_nuisance0p9_discovery_full_top128")
+        grouped_instability_row = latest_config.get("waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_instability_jtt_gate_nuisance0p9_discovery_full_top128")
+        grouped_random_row = latest_config.get("waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_gate_nuisance0p9_random_top128")
+        lines.extend(["", "Control takeaway:"])
+        if discovery_row and fixed_random_row:
+            lines.append(
+                f"- Fixed-gated discovery top-128 reaches {_format_metric(discovery_row, 'test/worst_group_accuracy')} test WGA, while matched random top-512 reaches {_format_metric(fixed_random_row, 'test/worst_group_accuracy')}."
+            )
+        if fixed_instability_row and discovery_row:
+            lines.append(
+                f"- Fixed instability-JTT top-128 reaches {_format_metric(fixed_instability_row, 'test/worst_group_accuracy')} test WGA, so the compact win for this hybrid does not survive promotion against fixed discovery top-128 at {_format_metric(discovery_row, 'test/worst_group_accuracy')}."
+            )
+        if grouped_discovery_row and grouped_random_row:
+            lines.append(
+                f"- Grouped discovery top-128 reaches {_format_metric(grouped_discovery_row, 'test/worst_group_accuracy')} test WGA, while grouped random top-128 reaches {_format_metric(grouped_random_row, 'test/worst_group_accuracy')}."
+            )
+        if grouped_instability_row and grouped_random_row:
+            lines.append(
+                f"- Grouped instability-JTT top-128 reaches {_format_metric(grouped_instability_row, 'test/worst_group_accuracy')} test WGA, clearing grouped random top-128 at {_format_metric(grouped_random_row, 'test/worst_group_accuracy')} and narrowing the gap to fixed-gated discovery top-128."
+            )
+
+    compact_gate_rows = [
+        ("grouped_discovery_top128", "waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_gate_nuisance0p9_compact_grouped_discovery_top128_discovery_full_top128_compact"),
+        ("grouped_scored_top128", "waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_scored_gate_nuisance0p9_compact_grouped_scored_discovery_top128_discovery_full_top128_compact"),
+        ("grouped_conditioned_top128", "waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_conditioned_gate_nuisance0p9_compact_grouped_conditioned_discovery_top128_discovery_full_top128_compact"),
+        ("grouped_contextual_top128", "waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_contextual_gate_nuisance0p9_compact_grouped_contextual_discovery_top128_discovery_full_top128_compact"),
+        ("grouped_representation_top128", "waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_representation_gate_nuisance0p9_compact_grouped_representation_discovery_top128_discovery_full_top128_compact"),
+        ("grouped_disagreement_top128", "waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_disagreement_gate_nuisance0p9_compact_grouped_disagreement_discovery_top128_discovery_full_top128_compact"),
+        ("grouped_replay_top128", "waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_replay_gate_nuisance0p9_compact_grouped_replay_discovery_top128_discovery_full_top128_compact"),
+        ("grouped_instability_jtt_top128", "waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_instability_jtt_gate_nuisance0p9_compact_grouped_instability_jtt_discovery_top128_discovery_full_top128_compact"),
+        ("grouped_loss_delta_instability_jtt_top128", "waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_loss_delta_instability_jtt_gate_nuisance0p9_compact_grouped_loss_delta_instability_jtt_discovery_top128_discovery_full_top128_compact"),
+        ("grouped_group_loss_delta_instability_jtt_top128", "waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_group_loss_delta_instability_jtt_gate_nuisance0p9_compact_grouped_group_loss_delta_instability_jtt_discovery_top128_discovery_full_top128_compact"),
+    ]
+    available_compact_rows = [(label, latest_config[name]) for label, name in compact_gate_rows if name in latest_config]
+    if available_compact_rows:
+        lines.extend(["", "## Waterbirds Compact Gate Mechanisms", "", "Latest compact gate comparison rows for grouped discovery consumers at top-128.", "", "| Variant | Test WGA | Test Acc | Val WGA | Run |", "| --- | ---: | ---: | ---: | --- |"])
+        for label, row in available_compact_rows:
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        label,
+                        _format_metric(row, "test/worst_group_accuracy"),
+                        _format_metric(row, "test/accuracy"),
+                        _format_metric(row, "val/worst_group_accuracy"),
+                        row.get("run", ""),
+                    ]
+                )
+                + " |"
+            )
+        lines.extend([
+            "",
+            "Compact takeaway:",
+            "- Instability-JTT is the first grouped mechanism variant to beat the plain grouped discovery compact baseline; the earlier score-conditioned, contextual, representation-conditioned, disagreement-weighted, and instability-replay variants all failed this check.",
+        ])
+        stable_sweep_path = Path(args.runs) / "waterbirds-stable-instability-jtt-sweep.csv"
+        if stable_sweep_path.exists():
+            stable_rows = list(csv.DictReader(stable_sweep_path.open()))
+            if stable_rows:
+                best_stable = max(stable_rows, key=lambda row: float(row.get("promotion_score", 0.0)))
+                eligible_count = sum(int(row.get("eligible_for_promotion", "0")) for row in stable_rows)
+                lines.append(
+                    "- A stability-penalized stage-1 score (`mean_minus_std`) did not produce a promotable compact candidate under the stricter compact rule; its best compact promotion score was "
+                    + f"{float(best_stable.get('promotion_score', 0.0)):.3f}"
+                    + f" with {eligible_count} eligible rows."
+                )
+        loss_weighted_sweep_path = Path(args.runs) / "waterbirds-loss-weighted-instability-jtt-sweep.csv"
+        if loss_weighted_sweep_path.exists():
+            loss_weighted_rows = list(csv.DictReader(loss_weighted_sweep_path.open()))
+            if loss_weighted_rows:
+                best_loss_weighted = max(loss_weighted_rows, key=lambda row: float(row.get("promotion_score", 0.0)))
+                eligible_count = sum(int(row.get("eligible_for_promotion", "0")) for row in loss_weighted_rows)
+                lines.append(
+                    "- A loss-weighted stage-1 score (`loss_weighted_mean`) also failed the stricter compact promotion rule; its best compact promotion score was "
+                    + f"{float(best_loss_weighted.get('promotion_score', 0.0)):.3f}"
+                    + f" with {eligible_count} eligible rows."
+                )
+
+    alignment_path = Path(args.runs) / "waterbirds-compact-promotion-alignment.csv"
+    if alignment_path.exists():
+        alignment_rows = list(csv.DictReader(alignment_path.open()))
+        if alignment_rows:
+            lines.extend(["", "## Compact Promotion Alignment", "", "Latest compact-vs-full alignment rows for promoted Waterbirds gate variants.", "", "| Variant | Compact Test WGA | Full Test WGA | Full-Compact Gap |", "| --- | ---: | ---: | ---: |"])
+            for row in alignment_rows:
+                lines.append(
+                    "| "
+                    + " | ".join(
+                        [
+                            row.get("label", ""),
+                            row.get("compact_test_wga", ""),
+                            row.get("full_test_wga", ""),
+                            row.get("test_wga_gap_full_minus_compact", ""),
+                        ]
+                    )
+                    + " |"
+                )
+            lines.extend([
+                "",
+                "Alignment takeaway:",
+                "- Compact WGA is directionally useful for screening, but the gap to full runs remains large and variant-dependent, so promotion now requires both compact test and validation WGA to clear thresholds with only a small test-validation gap before any full run changes the ranking.",
+            ])
 
     benchmark_ids = sorted({row.get("benchmark_id", "") for rows in grouped.values() for row in rows})
     lit_sections = [benchmark_id for benchmark_id in benchmark_ids if literature_rows(benchmark_id)]

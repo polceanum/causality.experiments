@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from causality_experiments.data import load_dataset
-from causality_experiments.methods import FeatureGate, _apply_causal_input_gate, fit_method
+from causality_experiments.methods import FeatureGate, _apply_causal_input_gate, _counterfactual_disagreement_weights, _estimate_counterfactual_instability, _instability_sample_weights, _select_replay_indices, _update_instability_ema, fit_method
 from causality_experiments.metrics import evaluate
 
 
@@ -67,6 +67,300 @@ def test_feature_gate_can_use_score_prior() -> None:
     )
     values = gate.gate()
     assert values[0].item() > values[1].item()
+
+
+def test_feature_gate_can_learn_score_conditioned_offset() -> None:
+    import torch
+
+    causal_mask = torch.tensor([1.0, 1.0], dtype=torch.float32)
+    score_prior = torch.tensor([0.9, 0.1], dtype=torch.float32)
+    gate = FeatureGate(
+        causal_mask,
+        learned=False,
+        score_prior=score_prior,
+        score_conditioned=True,
+    )
+    with torch.no_grad():
+        gate.score_alpha.fill_(2.0)
+    values = gate.gate()
+    assert values[0].item() > values[1].item()
+
+
+def test_feature_gate_can_adapt_to_example_context() -> None:
+    import torch
+
+    causal_mask = torch.tensor([1.0, 1.0, 1.0, 1.0], dtype=torch.float32)
+    gate = FeatureGate(
+        causal_mask,
+        learned=False,
+        group_size=2,
+        contextual=True,
+    )
+    with torch.no_grad():
+        gate.context_alpha[0] = 2.0
+    xb = torch.tensor(
+        [
+            [4.0, 4.0, 0.1, 0.1],
+            [0.1, 0.1, 4.0, 4.0],
+        ],
+        dtype=torch.float32,
+    )
+    values = gate.gate(xb)
+    assert values[0, 0].item() > values[0, 2].item()
+    assert values[1, 0].item() < values[1, 2].item()
+
+
+def test_feature_gate_can_adapt_to_representation_context() -> None:
+    import torch
+
+    causal_mask = torch.tensor([1.0, 1.0, 1.0, 1.0], dtype=torch.float32)
+    gate = FeatureGate(
+        causal_mask,
+        learned=False,
+        group_size=2,
+        representation_conditioned=True,
+        context_dim=3,
+    )
+    with torch.no_grad():
+        gate.context_projection.weight.zero_()
+        gate.context_projection.bias.zero_()
+        gate.context_projection.weight[0, 0] = 2.0
+        gate.context_projection.weight[1, 0] = -2.0
+    context = torch.tensor(
+        [
+            [1.0, 0.0, 0.0],
+            [-1.0, 0.0, 0.0],
+        ],
+        dtype=torch.float32,
+    )
+    values = gate.gate(context=context)
+    assert values[0, 0].item() > values[0, 2].item()
+    assert values[1, 0].item() < values[1, 2].item()
+
+
+def test_counterfactual_disagreement_weights_emphasize_unstable_examples() -> None:
+    import torch
+
+    logits = torch.tensor([[4.0, 0.0], [0.5, 0.0]], dtype=torch.float32)
+    cf_logits = torch.tensor([[0.0, 4.0], [0.45, 0.0]], dtype=torch.float32)
+    weights = _counterfactual_disagreement_weights(logits, cf_logits, scale=1.0, floor=0.5)
+    assert weights[0].item() > weights[1].item()
+    assert weights[1].item() >= 0.5
+
+
+def test_instability_ema_replay_prioritizes_persistently_unstable_examples() -> None:
+    import torch
+
+    ema = torch.zeros(4, dtype=torch.float32)
+    ema = _update_instability_ema(
+        ema,
+        torch.tensor([0, 1, 2]),
+        torch.tensor([0.8, 0.2, 0.5]),
+        decay=0.5,
+    )
+    replay = _select_replay_indices(ema, torch.tensor([0, 1, 2]), fraction=1 / 3)
+    assert replay.tolist() == [0]
+
+
+def test_instability_sample_weights_upweight_top_fraction() -> None:
+    import torch
+
+    weights = _instability_sample_weights(
+        torch.tensor([0.9, 0.1, 0.8, 0.2], dtype=torch.float32),
+        top_fraction=0.5,
+        upweight=5.0,
+    )
+    assert weights.tolist() == [5.0, 1.0, 5.0, 1.0]
+
+
+def test_instability_score_mode_penalizes_high_variance_examples() -> None:
+    import torch
+
+    class StubModel:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def predict(self, xb: torch.Tensor) -> torch.Tensor:
+            base = torch.zeros((len(xb), 2), dtype=torch.float32)
+            base[:, 0] = 4.0
+            logits = [
+                base.clone(),
+                base.clone(),
+                base.clone(),
+            ]
+            logits[1][0] = torch.tensor([0.0, 4.0], dtype=torch.float32)
+            logits[1][1] = torch.tensor([2.0, 2.0], dtype=torch.float32)
+            logits[2][1] = torch.tensor([0.0, 4.0], dtype=torch.float32)
+            out = logits[self.calls]
+            self.calls += 1
+            return out
+
+    bundle = load_dataset({"seed": 3, "dataset": {"kind": "synthetic_linear", "n": 120}})
+    model = StubModel()
+    mean_scores = _estimate_counterfactual_instability(model, bundle, passes=2, seed=0, score_mode="mean")
+    model = StubModel()
+    stable_scores = _estimate_counterfactual_instability(model, bundle, passes=2, seed=0, score_mode="mean_minus_std")
+    assert (mean_scores[0] - stable_scores[0]).item() > (mean_scores[1] - stable_scores[1]).item()
+    assert stable_scores[0].item() < stable_scores[1].item()
+
+
+def test_instability_score_mode_can_upweight_hard_examples() -> None:
+    import torch
+
+    class StubModel:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def predict(self, xb: torch.Tensor) -> torch.Tensor:
+            base = torch.zeros((len(xb), 2), dtype=torch.float32)
+            base[:, 0] = 4.0
+            logits = [
+                base.clone(),
+                base.clone(),
+                base.clone(),
+            ]
+            logits[0][1] = torch.tensor([0.3, 0.0], dtype=torch.float32)
+            logits[1][0] = torch.tensor([0.0, 4.0], dtype=torch.float32)
+            logits[1][1] = torch.tensor([0.0, 0.3], dtype=torch.float32)
+            logits[2][0] = torch.tensor([0.0, 4.0], dtype=torch.float32)
+            logits[2][1] = torch.tensor([0.0, 0.3], dtype=torch.float32)
+            out = logits[self.calls]
+            self.calls += 1
+            return out
+
+    bundle = load_dataset({"seed": 3, "dataset": {"kind": "synthetic_linear", "n": 120}})
+    train = bundle.split("train")
+    train["y"][:2] = torch.tensor([0, 1])
+    model = StubModel()
+    mean_scores = _estimate_counterfactual_instability(model, bundle, passes=2, seed=0, score_mode="mean")
+    model = StubModel()
+    weighted_scores = _estimate_counterfactual_instability(model, bundle, passes=2, seed=0, score_mode="loss_weighted_mean")
+    assert (weighted_scores[0] / mean_scores[0]).item() < 1.0
+    assert (weighted_scores[1] / mean_scores[1]).item() > (weighted_scores[0] / mean_scores[0]).item()
+    assert weighted_scores[0].item() < weighted_scores[1].item()
+
+
+def test_instability_score_mode_can_focus_on_counterfactual_loss_increase() -> None:
+    import torch
+
+    class StubModel:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def predict(self, xb: torch.Tensor) -> torch.Tensor:
+            factual = torch.zeros((len(xb), 2), dtype=torch.float32)
+            factual[:, 0] = 4.0
+            counterfactual = factual.clone()
+            factual[1] = torch.tensor([1.2, 0.0], dtype=torch.float32)
+            counterfactual[0] = torch.tensor([3.5, 0.0], dtype=torch.float32)
+            counterfactual[1] = torch.tensor([0.0, 1.2], dtype=torch.float32)
+            logits = [factual, counterfactual]
+            out = logits[self.calls]
+            self.calls += 1
+            return out
+
+    bundle = load_dataset({"seed": 3, "dataset": {"kind": "synthetic_linear", "n": 120}})
+    train = bundle.split("train")
+    train["y"][:2] = torch.tensor([0, 0])
+    model = StubModel()
+    loss_delta_scores = _estimate_counterfactual_instability(
+        model,
+        bundle,
+        passes=1,
+        seed=0,
+        score_mode="counterfactual_loss_increase_mean",
+    )
+    assert loss_delta_scores[1].item() > loss_delta_scores[0].item()
+    assert loss_delta_scores[1].item() > 0.0
+
+
+def test_instability_score_mode_can_upweight_hard_groups() -> None:
+    import torch
+
+    class StubModel:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def predict(self, xb: torch.Tensor) -> torch.Tensor:
+            base = torch.zeros((len(xb), 2), dtype=torch.float32)
+            base[:, 0] = 4.0
+            logits = [
+                base.clone(),
+                base.clone(),
+                base.clone(),
+            ]
+            logits[0][0] = torch.tensor([0.3, 0.0], dtype=torch.float32)
+            logits[0][1] = torch.tensor([0.3, 0.0], dtype=torch.float32)
+            logits[1][0] = torch.tensor([0.0, 4.0], dtype=torch.float32)
+            logits[1][2] = torch.tensor([0.0, 4.0], dtype=torch.float32)
+            out = logits[self.calls]
+            self.calls += 1
+            return out
+
+    bundle = load_dataset({"seed": 3, "dataset": {"kind": "synthetic_linear", "n": 120}})
+    train = bundle.split("train")
+    train["y"][:] = 0
+    train["group"][:] = 1
+    train["y"][:2] = torch.tensor([1, 1])
+    train["group"][:2] = 0
+    model = StubModel()
+    mean_scores = _estimate_counterfactual_instability(model, bundle, passes=2, seed=0, score_mode="mean")
+    model = StubModel()
+    group_scores = _estimate_counterfactual_instability(model, bundle, passes=2, seed=0, score_mode="group_loss_weighted_mean")
+    assert round(mean_scores[0].item(), 6) == round(mean_scores[2].item(), 6)
+    assert group_scores[0].item() > group_scores[2].item()
+
+
+def test_instability_score_mode_can_focus_on_counterfactual_loss_increase_in_hard_groups() -> None:
+    import torch
+
+    class StubModel:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def predict(self, xb: torch.Tensor) -> torch.Tensor:
+            factual = torch.zeros((len(xb), 2), dtype=torch.float32)
+            factual[:, 0] = 4.0
+            counterfactual = factual.clone()
+            factual[0] = torch.tensor([0.6, 0.0], dtype=torch.float32)
+            factual[2] = torch.tensor([3.8, 0.0], dtype=torch.float32)
+            counterfactual[0] = torch.tensor([0.0, 0.6], dtype=torch.float32)
+            counterfactual[2] = torch.tensor([0.0, 0.6], dtype=torch.float32)
+            outputs = [factual, counterfactual]
+            out = outputs[self.calls]
+            self.calls += 1
+            return out
+
+    bundle = load_dataset({"seed": 3, "dataset": {"kind": "synthetic_linear", "n": 120}})
+    train = bundle.split("train")
+    train["y"][:] = 0
+    train["group"][:] = 1
+    train["y"][[0, 2]] = torch.tensor([0, 0])
+    train["group"][[0, 2]] = torch.tensor([0, 1])
+    model = StubModel()
+    scores = _estimate_counterfactual_instability(
+        model,
+        bundle,
+        passes=1,
+        seed=0,
+        score_mode="group_loss_weighted_counterfactual_loss_increase_mean",
+    )
+    assert scores[0].item() > scores[2].item()
+    assert scores[2].item() > 0.0
+
+
+def test_instability_score_mode_rejects_unknown_value() -> None:
+    class StubModel:
+        def predict(self, xb):
+            return xb[:, :2]
+
+    bundle = load_dataset({"seed": 3, "dataset": {"kind": "synthetic_linear", "n": 120}})
+    try:
+        _estimate_counterfactual_instability(StubModel(), bundle, passes=1, seed=0, score_mode="mystery")
+    except ValueError as exc:
+        assert "Unknown counterfactual instability score mode" in str(exc)
+    else:
+        raise AssertionError("expected ValueError for unknown instability score mode")
 
 
 def test_constant_metrics_are_bounded() -> None:

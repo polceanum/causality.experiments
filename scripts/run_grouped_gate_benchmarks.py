@@ -23,6 +23,17 @@ def _specs(
     *,
     include_scored: bool,
     score_weight: float,
+    include_conditioned: bool,
+    include_contextual: bool,
+    include_representation: bool,
+    include_disagreement: bool,
+    include_replay: bool,
+    include_instability_jtt: bool,
+    include_stable_instability_jtt: bool,
+    include_loss_weighted_instability_jtt: bool,
+    include_loss_delta_instability_jtt: bool,
+    include_group_loss_delta_instability_jtt: bool,
+    include_group_failure_instability_jtt: bool,
     include_utility: bool,
 ) -> list[dict[str, str | int | float | None]]:
     specs: list[dict[str, str | int | float | None]] = [
@@ -45,6 +56,116 @@ def _specs(
                 "score_weight": score_weight,
             }
         )
+    if include_conditioned:
+        specs.append(
+            {
+                "label": f"grouped_conditioned_top{top_k}",
+                "base": "configs/benchmarks/waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_conditioned_gate_nuisance0p9.yaml",
+                "variant": "discovery_full",
+                "score_path": "outputs/runs/waterbirds-feature-discovery-scores.csv",
+                "top_k": top_k,
+            }
+        )
+    if include_contextual:
+        specs.append(
+            {
+                "label": f"grouped_contextual_top{top_k}",
+                "base": "configs/benchmarks/waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_contextual_gate_nuisance0p9.yaml",
+                "variant": "discovery_full",
+                "score_path": "outputs/runs/waterbirds-feature-discovery-scores.csv",
+                "top_k": top_k,
+            }
+        )
+    if include_representation:
+        specs.append(
+            {
+                "label": f"grouped_representation_top{top_k}",
+                "base": "configs/benchmarks/waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_representation_gate_nuisance0p9.yaml",
+                "variant": "discovery_full",
+                "score_path": "outputs/runs/waterbirds-feature-discovery-scores.csv",
+                "top_k": top_k,
+            }
+        )
+    if include_disagreement:
+        specs.append(
+            {
+                "label": f"grouped_disagreement_top{top_k}",
+                "base": "configs/benchmarks/waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_disagreement_gate_nuisance0p9.yaml",
+                "variant": "discovery_full",
+                "score_path": "outputs/runs/waterbirds-feature-discovery-scores.csv",
+                "top_k": top_k,
+            }
+        )
+    if include_replay:
+        specs.append(
+            {
+                "label": f"grouped_replay_top{top_k}",
+                "base": "configs/benchmarks/waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_replay_gate_nuisance0p9.yaml",
+                "variant": "discovery_full",
+                "score_path": "outputs/runs/waterbirds-feature-discovery-scores.csv",
+                "top_k": top_k,
+            }
+        )
+    if include_instability_jtt:
+        specs.append(
+            {
+                "label": f"grouped_instability_jtt_top{top_k}",
+                "base": "configs/benchmarks/waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_instability_jtt_gate_nuisance0p9.yaml",
+                "variant": "discovery_full",
+                "score_path": "outputs/runs/waterbirds-feature-discovery-scores.csv",
+                "top_k": top_k,
+            }
+        )
+    if include_stable_instability_jtt:
+        specs.append(
+            {
+                "label": f"grouped_stable_instability_jtt_top{top_k}",
+                "base": "configs/benchmarks/waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_stable_instability_jtt_gate_nuisance0p9.yaml",
+                "variant": "discovery_full",
+                "score_path": "outputs/runs/waterbirds-feature-discovery-scores.csv",
+                "top_k": top_k,
+            }
+        )
+    if include_loss_weighted_instability_jtt:
+        specs.append(
+            {
+                "label": f"grouped_loss_weighted_instability_jtt_top{top_k}",
+                "base": "configs/benchmarks/waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_loss_weighted_instability_jtt_gate_nuisance0p9.yaml",
+                "variant": "discovery_full",
+                "score_path": "outputs/runs/waterbirds-feature-discovery-scores.csv",
+                "top_k": top_k,
+            }
+        )
+    if include_loss_delta_instability_jtt:
+        specs.append(
+            {
+                "label": f"grouped_loss_delta_instability_jtt_top{top_k}",
+                "base": "configs/benchmarks/waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_loss_delta_instability_jtt_gate_nuisance0p9.yaml",
+                "variant": "discovery_full",
+                "score_path": "outputs/runs/waterbirds-feature-discovery-scores.csv",
+                "top_k": top_k,
+            }
+        )
+    if include_group_loss_delta_instability_jtt:
+        specs.append(
+            {
+                "label": f"grouped_group_loss_delta_instability_jtt_top{top_k}",
+                "base": "configs/benchmarks/waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_group_loss_delta_instability_jtt_gate_nuisance0p9.yaml",
+                "variant": "discovery_full",
+                "score_path": "outputs/runs/waterbirds-feature-discovery-scores.csv",
+                "top_k": top_k,
+            }
+        )
+    if include_group_failure_instability_jtt:
+        specs.append(
+            {
+                "label": f"grouped_group_failure_instability_jtt_top{top_k}",
+                "base": "configs/benchmarks/waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_group_failure_instability_jtt_gate_nuisance0p9.yaml",
+                "variant": "discovery_full",
+                "score_path": "outputs/runs/waterbirds-feature-discovery-scores.csv",
+                "top_k": top_k,
+            }
+        )
     if include_utility:
         specs.append(
             {
@@ -63,6 +184,17 @@ def main() -> None:
     parser.add_argument("--top-k", type=int, default=128)
     parser.add_argument("--device", default="auto")
     parser.add_argument("--include-scored", action="store_true")
+    parser.add_argument("--include-conditioned", action="store_true")
+    parser.add_argument("--include-contextual", action="store_true")
+    parser.add_argument("--include-representation", action="store_true")
+    parser.add_argument("--include-disagreement", action="store_true")
+    parser.add_argument("--include-replay", action="store_true")
+    parser.add_argument("--include-instability-jtt", action="store_true")
+    parser.add_argument("--include-stable-instability-jtt", action="store_true")
+    parser.add_argument("--include-loss-weighted-instability-jtt", action="store_true")
+    parser.add_argument("--include-loss-delta-instability-jtt", action="store_true")
+    parser.add_argument("--include-group-loss-delta-instability-jtt", action="store_true")
+    parser.add_argument("--include-group-failure-instability-jtt", action="store_true")
     parser.add_argument("--include-utility", action="store_true")
     parser.add_argument("--score-weight", type=float, default=0.5)
     parser.add_argument(
@@ -76,6 +208,17 @@ def main() -> None:
         args.utility_scores,
         include_scored=args.include_scored,
         score_weight=args.score_weight,
+        include_conditioned=args.include_conditioned,
+        include_contextual=args.include_contextual,
+        include_representation=args.include_representation,
+        include_disagreement=args.include_disagreement,
+        include_replay=args.include_replay,
+        include_instability_jtt=args.include_instability_jtt,
+        include_stable_instability_jtt=args.include_stable_instability_jtt,
+        include_loss_weighted_instability_jtt=args.include_loss_weighted_instability_jtt,
+        include_loss_delta_instability_jtt=args.include_loss_delta_instability_jtt,
+        include_group_loss_delta_instability_jtt=args.include_group_loss_delta_instability_jtt,
+        include_group_failure_instability_jtt=args.include_group_failure_instability_jtt,
         include_utility=args.include_utility,
     ):
         base = load_config(Path(str(spec["base"])))

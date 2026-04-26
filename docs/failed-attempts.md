@@ -163,3 +163,25 @@ issues unless they invalidate an experimental result.
     baseline and the stronger-head schedule variants, and should keep using
     richer clue targets or structured ranking objectives tied to downstream
     intervention quality.
+
+## 2026-04-26
+
+- **More stage-1 selector weighting as the next grouped-gate breakthrough**
+  - Attempt: extend the grouped instability-JTT selector family with two more
+    principled stage-1 scores: counterfactual excess label loss
+    (`counterfactual_loss_increase_mean`) and a group-weighted version of that
+    same signal
+    (`group_loss_weighted_counterfactual_loss_increase_mean`).
+  - Result: the excess-loss selector reached compact test WGA `0.667`, val WGA
+    `0.647`, and promotion score `0.647` with zero promotable rows. The
+    group-weighted excess-loss selector reached compact test WGA `0.673`, val
+    WGA `0.639`, and promotion score `0.639`, also with zero promotable rows.
+  - Interpretation: using label-loss degradation is cleaner than raw
+    disagreement, but this branch still fails the stricter compact promotion
+    rule and does not improve on grouped instability-JTT. Adding group failure
+    weighting nudged test WGA up a little while making validation alignment
+    worse.
+  - Action: stop defaulting to more stage-1 weighting variants. The next
+    mechanism step should target the stage-2 counterfactual-adversarial
+    objective, such as group-conditional replay or hard-group consistency,
+    rather than keep changing only the selector.

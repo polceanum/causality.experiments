@@ -259,6 +259,124 @@ signals. Keep this focused on what was tried and what was learned.
 - Upgraded `scripts/report_benchmark_alignment.py` from a coarse alignment
   check into a direct comparison artifact.
 
+## 2026-04-26: Gate Controls And Mechanism Reality Check
+
+- Added and validated several grouped-gate mechanism variants on the real
+  Waterbirds feature benchmark path:
+  - score-conditioned gate offsets
+  - contextual grouped gates
+  - representation-conditioned grouped gates
+  - disagreement-weighted counterfactual training
+  - instability-replay counterfactual training with per-example EMA tracking
+  - two-stage instability-JTT upweighting based on persistent counterfactual
+    instability rather than ERM mistakes
+- All of the above passed focused tests and full regression tests, but none beat
+  the existing grouped discovery compact baseline.
+- Latest compact top-128 grouped results:
+  - grouped discovery: test WGA about 0.575
+  - grouped scored: about 0.550
+  - grouped conditioned: about 0.569
+  - grouped contextual: about 0.570
+  - grouped representation-conditioned: about 0.572
+  - grouped disagreement-weighted: about 0.553
+  - grouped instability-replay: about 0.544
+  - grouped instability-JTT: about 0.662
+- Full-budget promoted instability-JTT result:
+  - grouped instability-JTT top-128 reached test WGA about 0.785 and val WGA
+    about 0.797.
+  - This beats grouped discovery top-128 at about 0.752 and grouped random
+    top-128 at about 0.766.
+  - It still trails the earlier fixed-gated discovery top-128 anchor at about
+    0.790 by a small margin.
+- Fixed instability-JTT hybrid check:
+  - pairing instability-JTT training with the fixed discovery-gated consumer
+    looked strong on the compact run at about 0.706 test WGA.
+  - the promoted full top-128 hybrid only reached about 0.713 test WGA, well
+    below fixed discovery top-128 and below grouped instability-JTT.
+  - Interpretation: the compact win did not survive promotion, so the fixed
+    consumer is not a free upgrade for the instability-based selection signal.
+- Grouped instability-JTT compact sweep:
+  - added `scripts/run_instability_jtt_sweep.py` to sweep stage-1 epochs,
+    unstable-example fraction, and upweight under the compact budget.
+  - best compact setting in the first sweep was stage1 epochs 20, top fraction
+    0.15, upweight 3.0, with compact test WGA about 0.701.
+  - promoted full run for that sweep winner only reached about 0.673 test WGA,
+    so the compact winner did not survive promotion.
+- Added `scripts/report_compact_promotion_alignment.py` and the generated
+  `outputs/runs/waterbirds-compact-promotion-alignment.csv` artifact so compact
+  screening versus full-run outcomes are explicit rather than anecdotal.
+- Tightened compact promotion policy for follow-up sweeps:
+  - compact candidates should only be promoted when both compact test WGA and
+    compact val WGA clear thresholds and their gap stays small.
+  - `scripts/run_instability_jtt_sweep.py` now records `promotion_score` and
+    `eligible_for_promotion` directly in sweep outputs.
+- Stability-aware stage-1 follow-up:
+  - added a variance-penalized instability score mode,
+    `counterfactual_instability_score_mode: mean_minus_std`, to reduce noisy
+    stage-1 selections.
+  - added grouped config
+    `waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_stable_instability_jtt_gate_nuisance0p9.yaml`
+    plus runner hooks for compact/full evaluation.
+  - first compact sweep over the stable score mode produced no promotable
+    candidates; the best compact promotion score was about 0.631, below the
+    existing grouped instability-JTT compact baseline.
+- Loss-aware stage-1 follow-up:
+  - added `counterfactual_instability_score_mode: loss_weighted_mean` so the
+    stage-1 selector can prioritize examples that are both counterfactually
+    unstable and hard for the stage-1 model on the clean input.
+  - added grouped config
+    `waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_loss_weighted_instability_jtt_gate_nuisance0p9.yaml`
+    plus runner hooks for compact/full evaluation.
+  - first compact sweep over the loss-weighted score mode still produced no
+    promotable candidates; the best compact promotion score was about 0.639,
+    which is better than the stability-penalized follow-up but still below the
+    existing grouped instability-JTT compact winner and below the promotion
+    threshold.
+- Counterfactual excess-loss stage-1 follow-up:
+  - added `counterfactual_instability_score_mode:
+    counterfactual_loss_increase_mean` so the selector prioritizes examples
+    whose label loss actually worsens under the nuisance swap, not just
+    examples with prediction drift.
+  - added grouped config
+    `waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_loss_delta_instability_jtt_gate_nuisance0p9.yaml`
+    plus runner hooks for compact/full evaluation.
+  - first compact check for that variant reached about 0.667 test WGA and
+    about 0.647 val WGA, for promotion score about 0.647 with zero eligible
+    rows.
+  - Interpretation: the excess-loss selector is mechanistically cleaner than
+    raw disagreement, but it still does not clear the grouped instability-JTT
+    compact bar or the stricter promotion rule.
+- Group-weighted counterfactual excess-loss follow-up:
+  - added `counterfactual_instability_score_mode:
+    group_loss_weighted_counterfactual_loss_increase_mean` so the selector can
+    favor examples that are both counterfactually fragile and drawn from groups
+    with high factual stage-1 loss.
+  - added grouped config
+    `waterbirds_features_counterfactual_adversarial_schedule_learned_grouped_group_loss_delta_instability_jtt_gate_nuisance0p9.yaml`
+    plus runner hooks for compact/full evaluation.
+  - first compact check for that variant reached about 0.673 test WGA and
+    about 0.639 val WGA, for promotion score about 0.639 with zero eligible
+    rows.
+  - Interpretation: adding group failure weighting improves compact test WGA a
+    little but hurts validation alignment and still fails promotion. The
+    stage-1 selector branch now looks locally exhausted.
+- Backfilled missing fixed-gated full-budget controls and added grouped
+  full-budget heuristic/random controls.
+- Full-budget control signal is now decisive:
+  - fixed gated discovery top-128: test WGA about 0.790
+  - fixed gated random top-512: about 0.773
+  - grouped learned-gate discovery top-128: about 0.752
+  - grouped learned-gate random top-128: about 0.766
+- Interpretation:
+  the current discovery mechanism is not yet proving causal signal extraction
+  beyond strong matched random-mask controls in the fixed-gated family, but the
+  new grouped instability-JTT variant is the first grouped mechanism step that
+  clears the matched grouped random-mask control. Future grouped-gate work
+  should use instability-JTT as the new local comparator, while fixed-gated
+  discovery remains the stronger overall anchor. The next principled mechanism
+  step should modify the stage-2 counterfactual-adversarial objective rather
+  than keep extending the stage-1 selector family.
+
 ## 2026-04-23: Discovery Learner Cleanup And Failure Mode
 
 - Split discovery supervision into three categories:
