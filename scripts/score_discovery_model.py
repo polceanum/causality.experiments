@@ -16,6 +16,7 @@ from causality_experiments.data import load_dataset
 from causality_experiments.discovery import (
     build_discovery_model,
     build_feature_clue_rows,
+    clue_feature_vector,
     combine_discovery_scores,
 )
 
@@ -77,7 +78,7 @@ def main() -> None:
 
     bundle = load_dataset(load_config(Path(args.config)))
     rows = build_feature_clue_rows(bundle, split_name=args.split)
-    x = torch.tensor([[float(row[key]) for key in feature_columns] for row in rows], dtype=torch.float32)
+    x = torch.tensor([clue_feature_vector(row, feature_columns) for row in rows], dtype=torch.float32)
     with torch.no_grad():
         rank_logits, support_logits = model(x)
         scores = combine_discovery_scores(rank_logits, support_logits).squeeze(1).tolist()

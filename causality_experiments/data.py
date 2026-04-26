@@ -235,7 +235,7 @@ def _waterbirds_features(config: dict[str, Any]) -> DatasetBundle:
         ]
     if not feature_cols:
         raise ValueError("Waterbirds feature adapter could not infer any numeric feature columns.")
-    causal_mask = _feature_causal_mask(
+    causal_mask, causal_feature_scores = _feature_causal_mask_and_scores(
         frame,
         feature_cols,
         config,
@@ -286,6 +286,7 @@ def _waterbirds_features(config: dict[str, Any]) -> DatasetBundle:
             ]
             if causal_mask is not None
             else [],
+            "causal_feature_scores": causal_feature_scores or [],
             "label_column": label_col,
             "environment_column": env_col,
             "group_column": group_col,
@@ -293,7 +294,7 @@ def _waterbirds_features(config: dict[str, Any]) -> DatasetBundle:
     )
 
 
-def _feature_causal_mask(
+def _feature_causal_mask_and_scores(
     frame: Any,
     feature_cols: list[str],
     config: dict[str, Any],
@@ -301,15 +302,17 @@ def _feature_causal_mask(
     split_col: str,
     label_col: str,
     env_col: str,
-) -> torch.Tensor | None:
+) -> tuple[torch.Tensor | None, list[float] | None]:
     explicit = set(str(col) for col in config.get("causal_feature_columns", []) or [])
     prefixes = tuple(str(prefix) for prefix in config.get("causal_feature_prefixes", []) or [])
     strategy = str(config.get("causal_mask_strategy", "")).strip().lower()
+    score_values: list[float] | None = None
     if explicit or prefixes:
         values = [
             1.0 if col in explicit or col.startswith(prefixes) else 0.0
             for col in feature_cols
         ]
+        score_values = list(values)
     elif strategy == "label_minus_env_correlation":
         train = frame[frame[split_col].astype(str).str.lower() == "train"]
         if train.empty:
@@ -317,6 +320,7 @@ def _feature_causal_mask(
         label_scores = train[feature_cols].corrwith(train[label_col]).abs().fillna(0.0)
         env_scores = train[feature_cols].corrwith(train[env_col]).abs().fillna(0.0)
         margins = label_scores - env_scores
+        score_values = [float(margins.get(col, 0.0)) for col in feature_cols]
         min_margin = float(config.get("causal_mask_min_margin", 0.0))
         top_k = int(config.get("causal_mask_top_k", 0) or 0)
         selected = margins >= min_margin
@@ -345,6 +349,7 @@ def _feature_causal_mask(
             ranked = sorted(score_map.items(), key=lambda item: item[1], reverse=True)[:top_k]
             selected_names.update(name for name, _ in ranked)
         values = [1.0 if col in selected_names else 0.0 for col in feature_cols]
+        score_values = [float(score_map.get(col, 0.0)) for col in feature_cols]
     elif strategy == "random_top_k":
         top_k = int(config.get("causal_mask_top_k", 0) or 0)
         if top_k <= 0:
@@ -354,8 +359,9 @@ def _feature_causal_mask(
         generator = np.random.default_rng(seed)
         chosen = set(generator.choice(feature_cols, size=count, replace=False).tolist())
         values = [1.0 if col in chosen else 0.0 for col in feature_cols]
+        score_values = list(values)
     elif not strategy:
-        return None
+        return None, None
     else:
         raise ValueError(
             "Unknown Waterbirds feature adapter causal mask strategy "
@@ -366,7 +372,7 @@ def _feature_causal_mask(
             "Waterbirds feature adapter causal mask selected no feature columns. "
             "Check causal_feature_columns, causal_feature_prefixes, or the derived-mask thresholds."
         )
-    return torch.tensor(values, dtype=torch.float32)
+    return torch.tensor(values, dtype=torch.float32), score_values
 
 
 DATASETS: dict[str, DatasetFactory] = {

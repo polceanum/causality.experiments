@@ -122,6 +122,87 @@ class SequenceClassifier(nn.Module):
         return embedded.mean(dim=1)
 
 
+class FeatureGate(nn.Module):
+    def __init__(
+        self,
+        causal_mask: torch.Tensor,
+        *,
+        causal_input_weight: float = 1.0,
+        nuisance_input_weight: float = 1.0,
+        learned: bool = False,
+        group_size: int = 1,
+        score_prior: torch.Tensor | None = None,
+        score_weight: float = 0.0,
+    ) -> None:
+        super().__init__()
+        causal_mask = causal_mask.detach().float()
+        nuisance_mask = 1.0 - causal_mask
+        base_gate = causal_input_weight * causal_mask + nuisance_input_weight * nuisance_mask
+        self.register_buffer("base_gate", base_gate)
+        self.group_size = max(int(group_size), 1)
+        self.score_weight = max(float(score_weight), 0.0)
+        if score_prior is not None and self.score_weight > 0.0:
+            score_prior = score_prior.detach().float()
+            if score_prior.shape != base_gate.shape:
+                raise ValueError("FeatureGate score_prior must match the causal mask shape.")
+            score_min = float(score_prior.min().item())
+            score_max = float(score_prior.max().item())
+            if score_max <= score_min + 1e-12:
+                normalized_scores = torch.ones_like(score_prior)
+            else:
+                normalized_scores = (score_prior - score_min) / (score_max - score_min)
+            score_scale = 1.0 + causal_mask * self.score_weight * (2.0 * normalized_scores - 1.0)
+            self.register_buffer("score_scale", score_scale.clamp_min(0.05))
+        else:
+            self.register_buffer("score_scale", torch.ones_like(base_gate))
+        if learned:
+            if self.group_size == 1:
+                self.feature_logits = nn.Parameter(torch.zeros_like(base_gate))
+            else:
+                group_count = (len(base_gate) + self.group_size - 1) // self.group_size
+                self.feature_logits = nn.Parameter(torch.zeros(group_count, dtype=base_gate.dtype))
+        else:
+            self.register_parameter("feature_logits", None)
+
+    def _expanded_feature_logits(self) -> torch.Tensor | None:
+        if self.feature_logits is None:
+            return None
+        if self.group_size == 1:
+            return self.feature_logits
+        return self.feature_logits.repeat_interleave(self.group_size)[: len(self.base_gate)]
+
+    def gate(self) -> torch.Tensor:
+        gate = self.base_gate * self.score_scale
+        feature_logits = self._expanded_feature_logits()
+        if feature_logits is not None:
+            gate = gate * (2.0 * torch.sigmoid(feature_logits))
+        return gate
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x * self.gate().to(x.device)
+
+
+class GatedModel(nn.Module):
+    def __init__(self, model: nn.Module, input_gate: FeatureGate) -> None:
+        super().__init__()
+        self.model = model
+        self.input_gate = input_gate
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.model(self.input_gate(x))
+
+    def encode(self, x: torch.Tensor) -> torch.Tensor:
+        return self.model.encode(self.input_gate(x))
+
+    def feature_importance(self) -> torch.Tensor | None:
+        first = next((m for m in self.model.modules() if isinstance(m, nn.Linear)), None)
+        if first is None:
+            return None
+        weight_importance = first.weight.detach().abs().mean(dim=0)
+        gate = self.input_gate.gate().detach().to(weight_importance.device)
+        return (weight_importance * gate).cpu()
+
+
 class _GradientReverse(torch.autograd.Function):
     @staticmethod
     def forward(ctx: Any, x: torch.Tensor, weight: float) -> torch.Tensor:
@@ -196,6 +277,10 @@ class TorchClassifier:
             return self.model(x.to(self.device)).cpu()
 
     def feature_importance(self) -> torch.Tensor | None:
+        if hasattr(self.model, "feature_importance"):
+            importance = self.model.feature_importance()
+            if importance is not None:
+                return importance
         if isinstance(self.model, SequenceClassifier):
             return None
         first = next((m for m in self.model.modules() if isinstance(m, nn.Linear)), None)
@@ -225,19 +310,65 @@ def _is_sequence(bundle: DatasetBundle) -> bool:
 
 def _make_model(bundle: DatasetBundle, method: dict[str, Any]) -> nn.Module:
     if _is_sequence(bundle):
-        vocab_size = int((bundle.metadata or {}).get("vocab_size", 12))
         return SequenceClassifier(
-            vocab_size=vocab_size,
+            vocab_size=int((bundle.metadata or {}).get("vocab_size", 12)),
             output_dim=bundle.output_dim,
             hidden_dim=int(method.get("hidden_dim", 64)),
             embedding_dim=int(method.get("embedding_dim", 16)),
         )
-    return MLP(
+    model = MLP(
         bundle.input_dim,
         bundle.output_dim,
         hidden_dim=int(method.get("hidden_dim", 64)),
         dropout=float(method.get("dropout", 0.0)),
     )
+    if bundle.causal_mask is None or not _uses_learned_input_gate(method):
+        return model
+    return GatedModel(
+        model,
+        FeatureGate(
+            bundle.causal_mask,
+            causal_input_weight=float(method.get("causal_input_weight", 1.0)),
+            nuisance_input_weight=float(method.get("nuisance_input_weight", 1.0)),
+            learned=True,
+            group_size=int(method.get("input_gate_group_size", 1)),
+            score_prior=_feature_score_prior(bundle, method),
+            score_weight=float(method.get("input_gate_score_weight", 0.0)),
+        ),
+    )
+
+
+def _uses_learned_input_gate(method: dict[str, Any]) -> bool:
+    gate_name = str(method.get("input_gate", "fixed")).strip().lower()
+    if gate_name in {"learned", "feature_gate", "learned_feature_gate"}:
+        return True
+    return bool(method.get("learned_input_gate", False))
+
+
+def _make_fixed_input_gate(bundle: DatasetBundle, method: dict[str, Any]) -> FeatureGate | None:
+    if bundle.causal_mask is None or _is_sequence(bundle):
+        return None
+    return FeatureGate(
+        bundle.causal_mask,
+        causal_input_weight=float(method.get("causal_input_weight", 1.0)),
+        nuisance_input_weight=float(method.get("nuisance_input_weight", 1.0)),
+        learned=False,
+        score_prior=_feature_score_prior(bundle, method),
+        score_weight=float(method.get("input_gate_score_weight", 0.0)),
+    )
+
+
+def _feature_score_prior(bundle: DatasetBundle, method: dict[str, Any]) -> torch.Tensor | None:
+    if not bool(method.get("input_gate_use_scores", False)):
+        return None
+    metadata = bundle.metadata or {}
+    values = metadata.get("causal_feature_scores")
+    if not values:
+        return None
+    prior = torch.tensor(values, dtype=torch.float32)
+    if bundle.causal_mask is not None and prior.shape != bundle.causal_mask.shape:
+        return None
+    return prior
 
 
 def fit_constant(bundle: DatasetBundle, config: dict[str, Any]) -> ConstantModel:
@@ -545,16 +676,15 @@ def _apply_causal_input_gate(
     xb: torch.Tensor,
     method: dict[str, Any],
 ) -> torch.Tensor:
-    if bundle.causal_mask is None or _is_sequence(bundle):
+    if bundle.causal_mask is None or _is_sequence(bundle) or _uses_learned_input_gate(method):
         return xb
-    nuisance_input_weight = float(method.get("nuisance_input_weight", 1.0))
-    causal_input_weight = float(method.get("causal_input_weight", 1.0))
-    if causal_input_weight == 1.0 and nuisance_input_weight == 1.0:
+    input_gate = _make_fixed_input_gate(bundle, method)
+    if input_gate is None:
         return xb
-    causal_mask = bundle.causal_mask.to(xb.device)
-    nuisance_mask = 1.0 - causal_mask
-    gate = causal_input_weight * causal_mask + nuisance_input_weight * nuisance_mask
-    return xb * gate
+    gate = input_gate.gate()
+    if torch.allclose(gate, torch.ones_like(gate)):
+        return xb
+    return input_gate(xb)
 
 
 def fit_counterfactual_adversarial(bundle: DatasetBundle, config: dict[str, Any]) -> TorchClassifier:

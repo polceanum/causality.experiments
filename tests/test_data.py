@@ -164,6 +164,8 @@ def test_waterbirds_feature_adapter_accepts_discovery_scores_mask(tmp_path) -> N
     )
     assert bundle.causal_mask is not None
     assert bundle.causal_mask.tolist() == [1.0, 0.0]
+    assert bundle.metadata is not None
+    assert bundle.metadata["causal_feature_scores"] == [0.9, 0.1]
 
 
 def test_waterbirds_feature_adapter_discovery_top_k_overrides_threshold(tmp_path) -> None:

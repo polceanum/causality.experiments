@@ -2,12 +2,15 @@ from pathlib import Path
 
 from causality_experiments.data import load_dataset
 from causality_experiments.discovery import (
+    aggregate_rank_target,
     aggregate_soft_causal_target,
     build_feature_clue_rows,
+    clue_feature_vector,
     combine_discovery_scores,
 )
+from scripts.annotate_discovery_utility import annotate_rows
+from scripts.train_discovery_model import _pairwise_ranking_loss, _row_rank_target, _utility_loss
 from scripts.score_discovery_model import _apply_support_restriction
-from scripts.train_discovery_model import _pairwise_ranking_loss
 
 
 def test_build_feature_clue_rows_uses_ground_truth_mask() -> None:
@@ -65,6 +68,19 @@ def test_soft_target_uses_margin_without_ground_truth() -> None:
         }
     )
     assert 0.5 < score < 1.0
+
+
+def test_rank_target_blends_utility_supervision() -> None:
+    row = {
+        "has_ground_truth_mask": False,
+        "has_explicit_supervision": False,
+        "has_cause_position": False,
+        "corr_margin": 0.0,
+        "utility_target": 1.0,
+        "utility_weight": 1.0,
+    }
+    assert aggregate_rank_target(row, utility_blend=1.0) == 1.0
+    assert aggregate_rank_target(row, utility_blend=0.0) == aggregate_soft_causal_target(row)
 
 
 def test_waterbirds_derived_mask_is_not_treated_as_explicit_supervision(tmp_path: Path) -> None:
@@ -128,3 +144,76 @@ def test_combined_discovery_score_uses_support_gate() -> None:
     scores = combine_discovery_scores(rank_logits, support_logits).squeeze(1)
     assert scores[0].item() > 0.9
     assert scores[1].item() < 0.1
+
+
+def test_row_rank_target_uses_utility_when_present() -> None:
+    row = {
+        "has_explicit_supervision": "false",
+        "has_cause_position": "false",
+        "corr_margin": "0.0",
+        "utility_target": "1.0",
+        "utility_weight": "1.0",
+    }
+    assert _row_rank_target(row, utility_blend=1.0) == 1.0
+
+
+def test_utility_loss_ignores_rows_without_utility_labels() -> None:
+    import torch
+
+    logits = torch.tensor([[0.0], [0.0]], dtype=torch.float32)
+    rows = [
+        {"utility_target": "1.0", "utility_weight": "1.0"},
+        {"utility_target": "", "utility_weight": "0.0"},
+    ]
+    loss = _utility_loss(logits, rows)
+    assert loss.item() > 0.0
+
+
+def test_annotate_rows_assigns_more_utility_to_features_in_better_masks(tmp_path: Path) -> None:
+    clue_rows = [
+        {"feature_name": "feature_0"},
+        {"feature_name": "feature_1"},
+        {"feature_name": "feature_2"},
+    ]
+    score_path = tmp_path / "scores.csv"
+    score_path.write_text(
+        "\n".join(
+            [
+                "dataset,feature_index,feature_name,support_score,rank_score,score",
+                "waterbirds_features,0,feature_0,0.9,0.9,0.9",
+                "waterbirds_features,1,feature_1,0.8,0.8,0.8",
+                "waterbirds_features,2,feature_2,0.1,0.1,0.1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    result_rows = [
+        {"support": "full", "top_k": "1", "val_wga": "0.8"},
+        {"support": "full", "top_k": "2", "val_wga": "0.4"},
+    ]
+    annotated = annotate_rows(
+        clue_rows,
+        result_rows,
+        {"full": score_path},
+        metric_key="val_wga",
+        variant_key="support",
+    )
+    by_feature = {row["feature_name"]: row for row in annotated}
+    assert float(by_feature["feature_0"]["utility_weight"]) >= float(by_feature["feature_1"]["utility_weight"])
+    assert by_feature["feature_2"]["utility_weight"] == "0.000000"
+
+
+def test_clue_feature_vector_backfills_legacy_rows() -> None:
+    row = {
+        "label_corr": "0.4",
+        "env_corr": "0.1",
+        "corr_margin": "0.3",
+        "mean": "-0.2",
+        "std": "0.5",
+        "task": "classification",
+        "modality": "features",
+        "supervision_source": "none",
+    }
+    vector = clue_feature_vector(row)
+    assert len(vector) > 0
+    assert max(vector) > 0.0
