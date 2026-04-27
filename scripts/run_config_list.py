@@ -33,6 +33,7 @@ def main() -> None:
                     "causal_probe": metrics.get("probe/causal_accuracy"),
                     "nuisance_probe": metrics.get("probe/nuisance_accuracy"),
                     "selectivity": metrics.get("probe/selectivity"),
+                    "nuisance_to_causal_importance": metrics.get("feature_importance/nuisance_to_causal"),
                 },
                 sort_keys=True,
             ),

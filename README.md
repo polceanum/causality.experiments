@@ -86,7 +86,7 @@ conda run -n orpheus python -m causality_experiments run \
 - `causality_experiments.data` provides dataset adapters and tiny generated
   mirrors for all 8 experiments described in the source document.
 - `causality_experiments.methods` provides runnable `constant`, `oracle`,
-  `erm`, `group_balanced_erm`, `group_dro`, `irm`, `jtt`,
+  `erm`, `dfr`, `causal_dfr`, `group_balanced_erm`, `group_dro`, `irm`, `jtt`,
   `adversarial_probe`, `counterfactual_adversarial`, and
   `counterfactual_augmentation` baselines plus adapter contracts for causal
   probes, β-VAE/iVAE/CITRIS/CSML/DeepIV.

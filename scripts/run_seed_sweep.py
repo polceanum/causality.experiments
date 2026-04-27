@@ -22,6 +22,8 @@ METHODS = (
     {"kind": "group_dro", "dro_eta": 0.1},
     {"kind": "irm", "penalty_weight": 1.0, "anneal_epochs": 5},
     {"kind": "jtt", "upweight": 5.0},
+    {"kind": "dfr", "dfr_epochs": 200, "dfr_lr": 7e-4, "dfr_weight_decay": 0.1},
+    {"kind": "causal_dfr", "dfr_epochs": 200, "dfr_lr": 7e-4, "dfr_weight_decay": 0.1, "causal_dfr_nuisance_weight": 30.0},
     {"kind": "adversarial_probe", "adv_weight": 0.05},
     {"kind": "counterfactual_adversarial", "adv_weight": 0.05, "consistency_weight": 0.2},
     {"kind": "counterfactual_augmentation", "consistency_weight": 0.2},
@@ -63,6 +65,8 @@ def main() -> None:
                         "irm",
                         "group_dro",
                         "jtt",
+                        "dfr",
+                        "causal_dfr",
                         "adversarial_probe",
                         "counterfactual_adversarial",
                     }:

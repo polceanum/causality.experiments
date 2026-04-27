@@ -386,6 +386,23 @@ class TorchClassifier:
             return self.model.encode(x.to(self.device)).cpu()
 
 
+@dataclass
+class DFRClassifier:
+    classifier: nn.Linear
+    device: torch.device
+
+    def predict(self, x: torch.Tensor) -> torch.Tensor:
+        self.classifier.eval()
+        with torch.no_grad():
+            return self.classifier(x.to(self.device)).cpu()
+
+    def feature_importance(self) -> torch.Tensor | None:
+        return self.classifier.weight.detach().abs().mean(dim=0).cpu()
+
+    def representations(self, x: torch.Tensor) -> torch.Tensor | None:
+        return self.predict(x)
+
+
 def _device(name: str | None) -> torch.device:
     if name in (None, "auto"):
         if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
@@ -479,6 +496,84 @@ def fit_oracle(bundle: DatasetBundle, config: dict[str, Any]) -> OracleMaskModel
     if bundle.causal_mask is None:
         raise ValueError("Oracle baseline requires dataset.causal_mask.")
     return OracleMaskModel(bundle.causal_mask, bundle.output_dim)
+
+
+def _fit_validation_split_dfr(
+    bundle: DatasetBundle,
+    config: dict[str, Any],
+    *,
+    nuisance_mask: torch.Tensor | None = None,
+) -> DFRClassifier:
+    method = dict(config.get("method", {}))
+    training = dict(config.get("training", {}))
+    seed = int(config.get("seed", 0))
+    torch.manual_seed(seed)
+    device = _device(str(training.get("device", "auto")))
+    split_name = str(method.get("dfr_split", "val"))
+    split = bundle.split(split_name)
+    x = split["x"]
+    y = split["y"]
+    dataset = TensorDataset(x, y)
+    generator = torch.Generator().manual_seed(seed)
+    batch_size = int(method.get("dfr_batch_size", training.get("batch_size", 64)))
+    if bool(method.get("dfr_balance_groups", True)):
+        groups = split["group"]
+        counts = torch.bincount(groups.long())
+        weights = 1.0 / counts.clamp_min(1).float()[groups.long()]
+        loader = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            sampler=WeightedRandomSampler(
+                weights=weights,
+                num_samples=len(weights),
+                replacement=True,
+                generator=generator,
+            ),
+        )
+    else:
+        loader = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            generator=generator,
+        )
+    classifier = nn.Linear(bundle.input_dim, bundle.output_dim).to(device)
+    opt = torch.optim.Adam(
+        classifier.parameters(),
+        lr=float(method.get("dfr_lr", training.get("lr", 1e-3))),
+        weight_decay=float(method.get("dfr_weight_decay", training.get("weight_decay", 0.0))),
+    )
+    epochs = int(method.get("dfr_epochs", training.get("epochs", 100)))
+    clip_grad = float(training.get("clip_grad", 1.0))
+    nuisance_weight = float(method.get("causal_dfr_nuisance_weight", method.get("nuisance_weight", 0.0)))
+    nuisance = nuisance_mask.to(device) if nuisance_mask is not None else None
+    for _ in range(epochs):
+        classifier.train()
+        for xb, yb in loader:
+            xb = xb.to(device)
+            yb = yb.to(device)
+            opt.zero_grad(set_to_none=True)
+            loss = F.cross_entropy(classifier(xb), yb)
+            if nuisance is not None and nuisance_weight > 0.0:
+                loss = loss + nuisance_weight * (classifier.weight * nuisance.unsqueeze(0)).pow(2).mean()
+            loss.backward()
+            if clip_grad > 0:
+                nn.utils.clip_grad_norm_(classifier.parameters(), clip_grad)
+            opt.step()
+    return DFRClassifier(classifier, device)
+
+
+def fit_dfr(bundle: DatasetBundle, config: dict[str, Any]) -> DFRClassifier:
+    return _fit_validation_split_dfr(bundle, config)
+
+
+def fit_causal_dfr(bundle: DatasetBundle, config: dict[str, Any]) -> DFRClassifier:
+    if bundle.causal_mask is None:
+        raise ValueError("Causal DFR requires dataset.causal_mask.")
+    if bundle.causal_mask.numel() != bundle.input_dim:
+        raise ValueError("Causal DFR requires dataset.causal_mask to match input_dim.")
+    nuisance_mask = 1.0 - bundle.causal_mask.float()
+    return _fit_validation_split_dfr(bundle, config, nuisance_mask=nuisance_mask)
 
 
 def fit_erm(bundle: DatasetBundle, config: dict[str, Any]) -> TorchClassifier:
@@ -1211,6 +1306,8 @@ METHODS = {
     "constant": fit_constant,
     "oracle": fit_oracle,
     "erm": fit_erm,
+    "dfr": fit_dfr,
+    "causal_dfr": fit_causal_dfr,
     "group_balanced_erm": fit_group_balanced_erm,
     "group_dro": fit_group_dro,
     "irm": fit_irm,

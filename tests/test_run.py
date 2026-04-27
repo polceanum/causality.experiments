@@ -2,7 +2,7 @@ from pathlib import Path
 import csv
 
 from causality_experiments.run import run_experiment, summarize_runs
-from scripts.report_benchmark_alignment import build_alignment_rows
+from scripts.report_benchmark_alignment import _experiment_name, build_alignment_rows
 from scripts.run_method_sweep import _config_has_causal_mask
 
 
@@ -204,3 +204,47 @@ def test_method_sweep_accepts_derived_causal_mask_strategy() -> None:
         }
     }
     assert _config_has_causal_mask(config) is True
+
+
+def test_alignment_suffix_parsing_keeps_causal_dfr_distinct() -> None:
+    assert _experiment_name("waterbirds_features_causal_dfr") == "waterbirds_features"
+    assert _experiment_name("waterbirds_features_dfr") == "waterbirds_features"
+    assert _experiment_name("waterbirds_features_causal_dfr") != "waterbirds_features_causal"
+
+
+def test_alignment_rows_mark_dfr_validation_usage(tmp_path: Path) -> None:
+    config = tmp_path / "waterbirds_features_dfr.yaml"
+    config.write_text(
+        """
+name: waterbirds_features_dfr
+benchmark:
+  kind: real
+  id: waterbirds
+  comparable_to_literature: true
+  provenance:
+    feature_extractor: resnet50
+    feature_source: local-export
+    split_definition: official split
+seed: 2
+dataset:
+  kind: synthetic_linear
+  n: 120
+method:
+  kind: dfr
+  dfr_epochs: 2
+training:
+  device: cpu
+  batch_size: 32
+metrics:
+  - accuracy
+  - worst_group_accuracy
+""",
+        encoding="utf-8",
+    )
+    run_experiment(config, tmp_path / "runs")
+    rows = build_alignment_rows(tmp_path / "runs", config_dirs=(str(tmp_path),))
+    dfr_rows = [row for row in rows if row["method"] == "dfr"]
+    assert dfr_rows
+    assert dfr_rows[0]["config"] == "waterbirds_features"
+    assert dfr_rows[0]["validation_usage"] == "trains_on_validation_groups"
+    assert not [row for row in rows if row["config"] == "waterbirds_features_dfr" and row["method"] == ""]

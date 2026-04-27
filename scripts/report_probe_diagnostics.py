@@ -13,6 +13,7 @@ from causality_experiments.run import summarize_runs
 
 
 PROPOSED_METHODS = {
+    "causal_dfr",
     "counterfactual_adversarial",
     "counterfactual_augmentation",
 }

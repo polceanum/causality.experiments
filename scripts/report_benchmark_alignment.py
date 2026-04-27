@@ -23,15 +23,18 @@ from causality_experiments.run import summarize_runs
 METHOD_SUFFIXES = (
     "_counterfactual_augmentation",
     "_counterfactual_adversarial",
+    "_causal_dfr",
     "_adversarial_probe",
     "_group_balanced_erm",
     "_group_dro",
+    "_dfr",
     "_irm",
     "_jtt",
     "_erm",
 )
 
 PROPOSED_METHODS = {
+    "causal_dfr",
     "counterfactual_adversarial",
     "counterfactual_augmentation",
 }
@@ -46,6 +49,12 @@ def _experiment_name(name: str) -> str:
 
 def _method_family(method: str) -> str:
     return "proposed" if method in PROPOSED_METHODS else "baseline"
+
+
+def _validation_usage(method: str) -> str:
+    if method in {"dfr", "causal_dfr"}:
+        return "trains_on_validation_groups"
+    return "holdout_validation_metrics"
 
 
 def _config_metadata() -> dict[str, dict[str, str]]:
@@ -162,6 +171,7 @@ def build_alignment_rows(
                 "comparable": str(comparable).lower(),
                 "comparison_status": _comparison_status(row, benchmark_id, comparable),
                 "method_family": _method_family(row.get("method", "")),
+                "validation_usage": _validation_usage(row.get("method", "")),
                 "provenance_complete": row.get("benchmark_provenance_complete", ""),
                 "feature_extractor": row.get("benchmark_feature_extractor", ""),
                 "feature_source": row.get("benchmark_feature_source", ""),
@@ -193,7 +203,7 @@ def build_alignment_rows(
             config = load_config(config_path)
             benchmark = benchmark_metadata(config)
             config_name = str(config.get("name", ""))
-            if config_name in known_configs:
+            if config_name in known_configs or _experiment_name(config_name) in known_configs:
                 continue
             benchmark_id = str(benchmark.get("id", ""))
             comparable = bool(benchmark.get("comparable_to_literature", False))
@@ -216,6 +226,7 @@ def build_alignment_rows(
                     "comparable": str(comparable).lower(),
                     "comparison_status": status,
                     "method_family": "",
+                    "validation_usage": "",
                     "provenance_complete": str(provenance_complete).lower(),
                     "feature_extractor": str(benchmark.get("provenance", {}).get("feature_extractor", "")),
                     "feature_source": str(benchmark.get("provenance", {}).get("feature_source", "")),
@@ -255,6 +266,7 @@ def main() -> None:
         "comparable",
         "comparison_status",
         "method_family",
+        "validation_usage",
         "provenance_complete",
         "feature_extractor",
         "feature_source",

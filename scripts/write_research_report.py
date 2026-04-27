@@ -20,12 +20,15 @@ METHODS = {
     "group_dro",
     "irm",
     "jtt",
+    "dfr",
+    "causal_dfr",
     "adversarial_probe",
     "counterfactual_adversarial",
     "counterfactual_augmentation",
 }
 
 PROPOSED_METHODS = {
+    "causal_dfr",
     "counterfactual_adversarial",
     "counterfactual_augmentation",
 }
@@ -35,9 +38,11 @@ def _experiment_name(config_name: str) -> str:
     for suffix in (
         "_counterfactual_augmentation",
         "_counterfactual_adversarial",
+        "_causal_dfr",
         "_adversarial_probe",
         "_group_balanced_erm",
         "_group_dro",
+        "_dfr",
         "_irm",
         "_jtt",
         "_erm",
@@ -190,6 +195,7 @@ def main() -> None:
         "- Compare tiny fixtures only against local baselines.",
         "- For real benchmarks, refresh `docs/literature-context.md` and report published reference/SOTA numbers next to local results.",
         "- Current `05_waterbirds` is Waterbirds-style, not the real Waterbirds benchmark; its WGA is not directly comparable to published Waterbirds numbers.",
+        "- `dfr` and `causal_dfr` train their final classifier on validation groups, so their validation metrics are protocol diagnostics rather than unbiased holdout metrics.",
         "",
         "| Experiment | Benchmark | Comparable? | Status | Best Method | Family | Test WGA | Test Acc | Literature Best WGA | Gap to Best WGA | Run |",
         "| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | --- |",

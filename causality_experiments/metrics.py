@@ -41,6 +41,33 @@ def support_recovery(model: FittedModel, bundle: DatasetBundle) -> float:
     return float((top == bundle.causal_mask).float().mean().item())
 
 
+def feature_importance_diagnostics(model: FittedModel, bundle: DatasetBundle) -> dict[str, float]:
+    if bundle.causal_mask is None:
+        return {
+            "feature_importance/causal_mean": float("nan"),
+            "feature_importance/nuisance_mean": float("nan"),
+            "feature_importance/nuisance_to_causal": float("nan"),
+        }
+    importance = model.feature_importance()
+    if importance is None:
+        return {
+            "feature_importance/causal_mean": float("nan"),
+            "feature_importance/nuisance_mean": float("nan"),
+            "feature_importance/nuisance_to_causal": float("nan"),
+        }
+    causal_mask = bundle.causal_mask.float().to(importance.device)
+    nuisance_mask = 1.0 - causal_mask
+    causal_count = causal_mask.sum().clamp_min(1.0)
+    nuisance_count = nuisance_mask.sum().clamp_min(1.0)
+    causal_mean = (importance * causal_mask).sum() / causal_count
+    nuisance_mean = (importance * nuisance_mask).sum() / nuisance_count
+    return {
+        "feature_importance/causal_mean": float(causal_mean.item()),
+        "feature_importance/nuisance_mean": float(nuisance_mean.item()),
+        "feature_importance/nuisance_to_causal": float((nuisance_mean / causal_mean.clamp_min(1e-12)).item()),
+    }
+
+
 def ate_proxy_error(model: FittedModel, bundle: DatasetBundle) -> float:
     metadata = bundle.metadata or {}
     if "cause_position" in metadata:
@@ -119,6 +146,7 @@ def evaluate(model: FittedModel, bundle: DatasetBundle, config: dict[str, Any]) 
         out[f"{split_name}/accuracy"] = accuracy(model, split)
         out[f"{split_name}/worst_group_accuracy"] = worst_group_accuracy(model, split)
     out["support_recovery"] = support_recovery(model, bundle)
+    out.update(feature_importance_diagnostics(model, bundle))
     out["ate_proxy_error"] = ate_proxy_error(model, bundle)
     out.update(probe_diagnostics(model, bundle))
     return out

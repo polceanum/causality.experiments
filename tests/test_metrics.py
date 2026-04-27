@@ -386,6 +386,100 @@ def test_oracle_reports_support_recovery() -> None:
     model = fit_method(bundle, config)
     metrics = evaluate(model, bundle, config)
     assert metrics["support_recovery"] == 1.0
+    assert metrics["feature_importance/nuisance_to_causal"] == 0.0
+
+
+def test_dfr_retrains_on_validation_split(tmp_path: Path) -> None:
+    csv_path = tmp_path / "features.csv"
+    rows = [
+        "split,y,place,group,feature_0,feature_1",
+        "train,0,0,0,1.0,0.0",
+        "train,1,1,3,-1.0,0.0",
+        "train,0,0,0,1.2,0.1",
+        "train,1,1,3,-1.2,-0.1",
+        "val,0,0,0,-1.0,0.0",
+        "val,0,1,2,-1.2,0.1",
+        "val,1,0,1,1.0,-0.1",
+        "val,1,1,3,1.2,0.0",
+        "test,0,1,2,-1.1,0.0",
+        "test,1,0,1,1.1,0.0",
+    ]
+    csv_path.write_text("\n".join(rows), encoding="utf-8")
+    config = {
+        "seed": 5,
+        "dataset": {"kind": "waterbirds_features", "path": str(csv_path)},
+        "method": {"kind": "dfr", "dfr_epochs": 80, "dfr_lr": 0.05},
+        "training": {"device": "cpu", "batch_size": 4},
+    }
+    bundle = load_dataset(config)
+    model = fit_method(bundle, config)
+    metrics = evaluate(model, bundle, config)
+    assert metrics["test/accuracy"] >= 0.99
+
+
+def test_causal_dfr_requires_causal_mask(tmp_path: Path) -> None:
+    csv_path = tmp_path / "features.csv"
+    rows = [
+        "split,y,place,group,feature_0,feature_1",
+        "train,0,0,0,-1.0,0.0",
+        "train,1,1,3,1.0,0.0",
+        "val,0,0,0,-1.0,0.0",
+        "val,1,1,3,1.0,0.0",
+        "test,0,0,0,-1.0,0.0",
+        "test,1,1,3,1.0,0.0",
+    ]
+    csv_path.write_text("\n".join(rows), encoding="utf-8")
+    config = {
+        "seed": 5,
+        "dataset": {"kind": "waterbirds_features", "path": str(csv_path)},
+        "method": {"kind": "causal_dfr"},
+        "training": {"device": "cpu"},
+    }
+    bundle = load_dataset(config)
+    try:
+        fit_method(bundle, config)
+    except ValueError as exc:
+        assert "Causal DFR requires dataset.causal_mask" in str(exc)
+    else:
+        raise AssertionError("expected causal_dfr to require a causal mask")
+
+
+def test_causal_dfr_suppresses_nuisance_dimensions(tmp_path: Path) -> None:
+    csv_path = tmp_path / "features.csv"
+    rows = [
+        "split,y,place,group,feature_0,feature_1",
+        "train,0,0,0,-1.0,-1.0",
+        "train,1,1,3,1.0,1.0",
+        "val,0,0,0,-1.0,-1.0",
+        "val,0,1,2,-1.1,-1.1",
+        "val,1,0,1,1.0,1.0",
+        "val,1,1,3,1.1,1.1",
+        "test,0,0,0,-1.0,-1.0",
+        "test,1,1,3,1.0,1.0",
+    ]
+    csv_path.write_text("\n".join(rows), encoding="utf-8")
+    config = {
+        "seed": 5,
+        "dataset": {
+            "kind": "waterbirds_features",
+            "path": str(csv_path),
+            "causal_feature_columns": ["feature_0"],
+        },
+        "method": {
+            "kind": "causal_dfr",
+            "dfr_epochs": 120,
+            "dfr_lr": 0.05,
+            "causal_dfr_nuisance_weight": 20.0,
+        },
+        "training": {"device": "cpu", "batch_size": 4},
+    }
+    bundle = load_dataset(config)
+    model = fit_method(bundle, config)
+    metrics = evaluate(model, bundle, config)
+    importance = model.feature_importance()
+    assert importance is not None
+    assert importance[1].item() < importance[0].item() * 0.2
+    assert metrics["feature_importance/nuisance_to_causal"] < 0.2
 
 
 def test_counterfactual_augmentation_runs() -> None:
@@ -436,6 +530,8 @@ def test_group_robust_baselines_run() -> None:
         "group_balanced_erm",
         "group_dro",
         "jtt",
+        "dfr",
+        "causal_dfr",
         "adversarial_probe",
         "counterfactual_adversarial",
     ):
