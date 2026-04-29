@@ -23,10 +23,14 @@ from causality_experiments.run import summarize_runs
 METHOD_SUFFIXES = (
     "_counterfactual_augmentation",
     "_counterfactual_adversarial",
+    "_official_dfr_val_tr",
+    "_counterfactual_causal_dfr",
+    "_representation_dfr",
     "_causal_dfr",
     "_adversarial_probe",
     "_group_balanced_erm",
     "_group_dro",
+    "_loss_weighted_dfr",
     "_dfr",
     "_irm",
     "_jtt",
@@ -35,6 +39,7 @@ METHOD_SUFFIXES = (
 
 PROPOSED_METHODS = {
     "causal_dfr",
+    "representation_dfr",
     "counterfactual_adversarial",
     "counterfactual_augmentation",
 }
@@ -52,7 +57,7 @@ def _method_family(method: str) -> str:
 
 
 def _validation_usage(method: str) -> str:
-    if method in {"dfr", "causal_dfr"}:
+    if method in {"dfr", "official_dfr_val_tr", "causal_dfr", "representation_dfr"}:
         return "trains_on_validation_groups"
     return "holdout_validation_metrics"
 

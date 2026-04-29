@@ -34,6 +34,8 @@ goal, not incidental development mechanics.
   - `constant`
   - `oracle`
   - `erm`
+  - `dfr`
+  - `causal_dfr`
   - `group_balanced_erm`
   - `group_dro`
   - `irm`
@@ -96,6 +98,226 @@ goal, not incidental development mechanics.
   not enough by itself; the Waterbirds config must document feature extractor,
   feature source, and split semantics before the repo treats the comparison as
   benchmark-ready.
+- DFR is now the benchmark-facing Waterbirds anchor on the fixed ResNet feature
+  table. Tuned single-seed results are about `0.897` test WGA for plain `dfr`
+  and about `0.900` test WGA for `causal_dfr`, versus the literature DFR WGA
+  reference of `0.929`.
+- DFR validation metrics are protocol diagnostics, not unbiased holdout metrics,
+  because `dfr` and `causal_dfr` train their final classifier on validation
+  groups.
+- Current DFR-native follow-ups are implemented behind opt-in config flags:
+  deterministic loss-weighted group balancing, group-weight power, DFR-head
+  counterfactual consistency, and soft-score `causal_dfr` nuisance priors.
+- First Waterbirds probes did not produce a promotable DFR variant: loss-weighted
+  DFR fell to about `0.875` test WGA, counterfactual consistency tied the tuned
+  anchor, hard/soft causal-DFR regularization sweeps tied at best around
+  `0.900`, and sampler group-weight powers away from `1.0` degraded WGA.
+- Additional DFR gap-closing probes also failed to improve the anchor:
+  representation-level DFR with an ERM MLP encoder fell to about `0.713` test
+  WGA, LBFGS full-batch logistic DFR overfit validation and stayed near `0.80`
+  test WGA, validation-threshold calibration had no principled test upside over
+  `causal_dfr`, exact balanced validation subsampling underperformed replacement
+  sampling, and train-feature standardization dropped DFR/causal-DFR to about
+  `0.875`/`0.872` test WGA.
+- The Waterbirds feature-prep path now supports protocol-aligned feature export:
+  `scripts/prepare_waterbirds_features.py --erm-finetune-epochs <n>
+  --erm-finetune-mode layer4 --features-csv data/waterbirds/features_erm_layer4_e<n>.csv
+  --config <matching-config> --overwrite-features`. This trains a target ERM
+  ResNet classifier on the Waterbirds train split before exporting penultimate
+  features, which is closer to the original DFR setup than frozen ImageNet
+  features.
+- The first protocol-aligned Waterbirds ERM-layer4 feature ladder did not close
+  the DFR gap. Using `scripts/run_waterbirds_erm_feature_dfr.py --epochs 1,3,5
+  --mode layer4 --batch-size 32 --lr 0.0001 --weight-decay 0.0001`, the best
+  result was epoch 3 `causal_dfr` at about `0.893` test WGA and `0.941` test
+  accuracy. Epoch 1 reached about `0.874` test WGA for both DFR variants; epoch
+  5 regressed to about `0.877`/`0.875` test WGA for `dfr`/`causal_dfr`.
+  Validation WGA stayed high around `0.938`-`0.942`, reinforcing that DFR
+  validation metrics are protocol diagnostics, not model-selection holdouts.
+  The fixed-feature tuned anchors (`dfr` about `0.897`, `causal_dfr` about
+  `0.900`) remain stronger locally.
+- An SGD plus train-time augmentation probe over the same layer4 fine-tuning
+  path also failed to close the DFR gap. Using
+  `scripts/run_waterbirds_erm_feature_dfr.py --epochs 3 --mode layer4 --tag
+  sgd_aug --optimizer sgd --augment --batch-size 32 --lr 0.001 --weight-decay
+  0.0001`, both `dfr` and `causal_dfr` reached about `0.889` test WGA, below
+  the fixed-feature tuned anchors and the earlier Adam/no-augmentation e3
+  `causal_dfr` run. This suggests the next protocol probe should change the
+  trainable backbone scope or training recipe rather than repeating layer4-only
+  DFR heads.
+- Full-backbone SGD plus train-time augmentation at learning rate `0.001` also
+  failed to close the gap. Using
+  `scripts/run_waterbirds_erm_feature_dfr.py --epochs 3 --mode all --tag
+  sgd_aug_all_lr1e3 --optimizer sgd --augment --batch-size 32 --lr 0.001
+  --weight-decay 0.0001`, both `dfr` and `causal_dfr` reached about `0.877`
+  test WGA despite about `0.929` test accuracy. The high average accuracy with
+  weaker WGA suggests this setting is too aggressive or insufficiently robust
+  for minority groups.
+- Full-backbone SGD plus train-time augmentation at learning rate `0.0001` was
+  also negative. Using `scripts/run_waterbirds_erm_feature_dfr.py --epochs 3
+  --mode all --tag sgd_aug_all_lr1e4 --optimizer sgd --augment --batch-size 32
+  --lr 0.0001 --weight-decay 0.0001`, both `dfr` and `causal_dfr` reached
+  about `0.863` test WGA and about `0.904` test accuracy. This lower learning
+  rate did not rescue full-backbone ERM features and performed below the
+  `0.001` probe and the fixed-feature tuned anchors.
+- Group-balanced full-backbone SGD plus train-time augmentation at learning
+  rate `0.0001` partially repaired the full-backbone failure but still did not
+  beat the fixed-feature anchor. Using
+  `scripts/run_waterbirds_erm_feature_dfr.py --epochs 3 --mode all --tag
+  gb_sgd_aug_all_lr1e4 --optimizer sgd --augment --balance-groups --batch-size
+  32 --lr 0.0001 --weight-decay 0.0001`, `dfr` reached about `0.889` test WGA
+  and `causal_dfr` reached about `0.893` test WGA. This validates group-aware
+  backbone training as a useful protocol axis, but it remains below the tuned
+  fixed-feature `causal_dfr` WGA around `0.900` and far below the literature DFR
+  reference `0.929`.
+- Group-balanced full-backbone SGD plus train-time augmentation at learning
+  rate `0.001` produced the best local full-backbone single-seed result so far,
+  but it still does not close the literature gap. Using
+  `scripts/run_waterbirds_erm_feature_dfr.py --epochs 3 --mode all --tag
+  gb_sgd_aug_all_lr1e3 --optimizer sgd --augment --balance-groups --batch-size
+  32 --lr 0.001 --weight-decay 0.0001`, `dfr` reached about `0.903` test WGA
+  and `causal_dfr` reached about `0.905` test WGA. This edges past the fixed
+  feature `causal_dfr` anchor around `0.900`, but only by a small single-seed
+  margin and it still trails the literature DFR reference `0.929` by about
+  `0.024`. Treat it as a diagnostic lift, not a promotable closure of the gap.
+- The repo now has a separate official-aligned comparator path for Waterbirds
+  DFR reproduction: `configs/benchmarks/waterbirds_features_official_dfr_val_tr.yaml`
+  plus `scripts/run_waterbirds_official_dfr.py`. This path is intended to match
+  the published `DFRVal^Tr` protocol more closely than the local Adam-based DFR
+  head, and should be the main benchmark-facing comparator until we know
+  whether the remaining gap is mostly protocol or representation.
+- The official-aligned Waterbirds comparator now works end to end on local
+  data. Using the exported feature table
+  `data/waterbirds/features_official_erm_official_repro.csv`, plain
+  `official_dfr_val_tr` reached about `0.931` test WGA, slightly above the
+  literature DFR reference `0.929`. This closes the earlier protocol gap: the
+  benchmark problem is no longer “why is local DFR below reported DFR,” but
+  “which mechanism can reliably beat the official local comparator.”
+- Official-feature mechanism transfer results are now mixed in a useful way:
+  single-seed `causal_dfr` reached about `0.939` test WGA on the official
+  feature table, but a seed-matched comparison over seeds `101`-`105` averaged
+  about `0.923` test WGA versus about `0.929` for plain `official_dfr_val_tr`.
+  Current `causal_dfr` therefore has upside but is not yet a stable win over
+  the official comparator.
+- Feature-swap `counterfactual_adversarial` remains non-competitive on the
+  official feature table. Plain official-feature transfer collapsed to about
+  `0.796` test WGA, a nuisance-zero ablation partially repaired it to about
+  `0.883`, and enlarging the causal mask did not rescue the method. This
+  strongly suggests the current random nuisance-swap construction is too
+  off-manifold for deep official Waterbirds features.
+- A new `official_representation_dfr` path is now implemented to test
+  representation learners against the exact official DFR downstream protocol.
+  The first swap-free adversarial representation probe underperformed:
+  `adversarial_probe` plus official DFR reached about `0.913` test WGA with
+  very poor selectivity (about `0.081`) and high nuisance-to-causal importance
+  (about `0.886`). After wiring fixed causal input gating into
+  `adversarial_probe`, a gated rerun improved diagnostics substantially
+  (selectivity about `0.314`, nuisance-to-causal importance about `0.170`) but
+  still fell to about `0.909` test WGA. The representation-level lesson so far
+  is that reducing nuisance reliance alone is not enough; the next mechanism
+  should preserve causal signal while suppressing nuisance, not just hard-mask
+  it.
+- Waterbirds benchmark status should now be read in three tiers:
+  - official baseline:
+    `official_dfr_val_tr` on `features_official_erm_official_repro.csv` at about
+    `0.931` test WGA is the locked comparator.
+  - promising but unstable:
+    official-feature `causal_dfr` and any single-seed mechanism variant that
+    beats the baseline but does not yet hold up under seed-matched averages.
+  - promoted:
+    only a candidate with seed-matched mean test WGA above the official
+    baseline and acceptable variance should be treated as a real improvement.
+- The repo now has two new official Waterbirds search tracks:
+  - `scripts/run_waterbirds_official_representation_sweep.py` for seed-matched
+    official-feature mechanism sweeps with CSV/JSON summaries.
+  - `scripts/run_waterbirds_official_backbone_sweep.py` for official-aligned
+    backbone/feature-generation sweeps scored by plain official DFR.
+- Track B now has a provenance guardrail. Waterbirds feature manifests record
+  resolved ERM/backbone settings, and the official backbone sweep reports
+  `manifest_settings_status` plus `base_metric_status`. Rows with missing
+  settings or collapsed base ERM WGA are listed under `blocked_rows` and are
+  skipped before downstream official DFR scoring.
+- The existing broken Track B artifact
+  `features_official_e50_lr0.001_envadv0_seed101.csv` is now formally blocked
+  by this audit path: its cached manifest lacks resolved settings and its base
+  ERM WGA is `0.0` on train, validation, and test. The audit artifact is
+  `outputs/dfr_sweeps/official-backbone-audit-e50-envadv0-seed101-20260428.json`.
+- A fresh rerun of that same no-env-adv Track B candidate reproduced the
+  collapse with truthful settings: `manifest_settings_status=ok`, but
+  `base_metric_status=blocked_base_erm:train/worst_group_accuracy,val/worst_group_accuracy,test/worst_group_accuracy`.
+  The rerun artifact is
+  `outputs/dfr_sweeps/official-backbone-rerun-e50-envadv0-seed101-20260428.json`.
+  This means the blocker is now a live training/export issue, not merely stale
+  provenance. The local `auto` device path also emitted repeated Metal/MPS
+  command-buffer failures during the rerun, so the backbone sweep now defaults
+  to CPU unless `--device auto` is requested explicitly.
+- One concrete Track B training-path bug is fixed: official-style custom
+  schedules now choose the official train-time augmentation based on
+  `eval_transform_style="official"`, not on `erm_finetune_preset="official"`.
+  This matters because Track B needs custom epochs/LR/env-adv settings without
+  accidentally falling back to generic aggressive `RandomResizedCrop`.
+  `tests/test_prepare_waterbirds_features.py` covers this path.
+- Track B now has a cheap CPU diagnostic mode: `--limit <n>` on
+  `scripts/run_waterbirds_official_backbone_sweep.py` uses a stratified
+  split/group metadata slice and includes `_limit<n>` in feature/output tags so
+  debug artifacts cannot be confused with full benchmark features. Base ERM
+  manifests now also record per-group accuracies and predicted-label counts.
+  On 2026-04-29, the corrected CPU path behaved sensibly on a 48-row slice:
+  - e1 no-env-adv was undertrained and predicted mostly label 0
+    (`14/16`-`15/16` predictions), giving group 3 WGA `0.0`.
+  - e3 no-env-adv cleared the guardrail with base test WGA `0.75` and
+    downstream official DFR test WGA `0.75`.
+  Scaling the same corrected e3 recipe to limit96, limit192, and limit384 kept
+  the guardrail green but exposed undertraining/label-bias behavior: downstream
+  official DFR test WGA was `0.75`, `0.8125`, and `0.8125`, while the limit384
+  base validation WGA fell to `0.1875` with heavy label-0 prediction bias.
+  Increasing only epochs at limit384 was more informative: e5 improved base
+  test/validation WGA to `0.84375`/`0.71875` and downstream official DFR test
+  WGA to `0.84375`; e10 improved base test/validation WGA further to
+  `0.9375`/`0.8125` but downstream official DFR fell back to `0.8125`. These
+  diagnostics argue against a basic label/index/export bug and point to e5
+  limit384 as the current Track B promotion candidate for a scheduled full CPU
+  seed101 run. Limited artifacts remain diagnostics only and must not be used
+  for benchmark claims.
+- Full Track B CPU runs now emit JSON progress from the ERM fine-tuning loop
+  and save a sidecar epoch checkpoint at
+  `data/waterbirds/<features>.csv.training.pt` while training. A successful
+  feature export removes the checkpoint after the manifest is written. This is
+  an operational guardrail for long no-limit runs, not a change to the training
+  objective or benchmark protocol.
+- The first no-limit Track B CPU promotion candidate completed cleanly but did
+  not beat the locked official comparator. Using e5, LR `0.001`, no env-adv,
+  seed `101`, and CPU, the manifest cleared both guardrails
+  (`manifest_settings_status=ok`, `base_metric_status=ok`) with base ERM test
+  WGA `0.7757009267807007` and validation WGA `0.7142857313156128`. Plain
+  downstream `official_dfr_val_tr` reached test WGA `0.914330244064331` and
+  test accuracy `0.9295822978019714`, below the locked comparator test WGA
+  `0.9314641952514648`. The artifact is
+  `outputs/dfr_sweeps/official-backbone-cpu-rerun-e5-envadv0-seed101-20260429.json`.
+  Do not promote this setting or run a seed sweep for it; the next Track B
+  branch should change one mechanism axis at a time, starting with
+  group-balanced backbone training.
+- The first group-balanced Track B follow-up was negative on the same diagnostic
+  slice that selected e5. The runner now includes `_gb` in group-balanced
+  feature tags so balanced and non-balanced artifacts cannot collide. With e5,
+  LR `0.001`, no env-adv, seed `101`, and `--limit 384 --balance-groups`, the
+  artifact cleared guardrails but had base validation/test WGA `0.5`/`0.78125`
+  and downstream official DFR test WGA `0.8125`, below the earlier no-balance
+  e5 limit384 diagnostic `0.84375`. Do not launch a full group-balanced e5 run
+  from this evidence; the next Track B mechanism-axis diagnostic should be a
+  small env-adv probe.
+- The first env-adv Track B follow-up was also negative on limit384. With e5,
+  LR `0.001`, env-adv `0.05`, seed `101`, and no group balancing, the artifact
+  cleared guardrails and improved base test WGA to `0.875`, but base validation
+  WGA was only `0.53125` and downstream official DFR test WGA fell to `0.75`.
+  This is the wrong tradeoff for the current promotion goal; do not launch a
+  full env-adv `0.05` e5 run from this evidence.
+- The first new Track A configs are:
+  - `waterbirds_features_official_adv_representation_dfr_score_gate`
+  - `waterbirds_features_official_adv_representation_dfr_nuisance_regularized`
+  These use the same official feature table and downstream DFR protocol as the
+  baseline, but swap in soft score-guided gating or explicit nuisance
+  regularization during representation learning.
 - The markdown research report now separates blocked real benchmark configs,
   real literature-comparable runs, and literature-aligned fixture runs. The
   current Waterbirds fixture gets a development-only per-method delta table
@@ -153,7 +375,32 @@ goal, not incidental development mechanics.
    - If the feature table has known bird-specific feature columns, set
      `dataset.causal_feature_columns` or `dataset.causal_feature_prefixes` so
      counterfactual methods can run honestly.
-2. Compose the strongest local mechanisms.
+2. Stabilize and improve the DFR anchor.
+   - Use `scripts/run_dfr_sweep.py` for narrow, predeclared DFR sweeps and CSV
+     outputs under `outputs/dfr_sweeps/`.
+   - Treat tuned `dfr` and `causal_dfr` as the immediate comparators for any
+     Waterbirds improvement claim.
+   - Promote only seed-stable improvements over the `0.897`/`0.900` tuned
+     anchors; single-run ties or tiny lifts should remain diagnostic.
+   - Do not select by DFR validation WGA, since validation groups are used for
+     retraining.
+   - The current evidence points away from final-head tweaks on the fixed
+     feature table, away from layer4-only ERM feature ladders, away from plain
+     full-backbone SGD plus augmentation at LR `0.001` or `0.0001`, and now
+     away from no-limit Track B e5/no-env-adv at LR `0.001`. That full CPU
+     seed101 run cleared guardrails but reached only `0.914330244064331`
+    downstream official DFR test WGA, below the locked official comparator
+    `0.9314641952514648`. The first group-balanced and env-adv e5 limit384
+    diagnostics were also negative (`0.8125` and `0.75` downstream WGA), so
+    full runs for those exact settings are not justified. The remaining
+    plausible gap is likely a different backbone-training recipe, a different
+    validation-feature source, or a stronger backbone, not another small DFR
+    objective variant or a seed sweep of the failed e5 variants.
+   - Do not promote the ERM-layer4 e1/e3/e5, SGD-augmentation layer4 e3,
+     full-backbone SGD-augmentation LR `0.001`/`0.0001`, or group-balanced
+     full-backbone SGD-augmentation LR `0.0001` feature tables as improvements;
+     they were diagnostic but remained below the fixed-feature tuned anchor.
+3. Compose the strongest local mechanisms.
    - Future mechanism changes should be screened first against the matched
      fixed/grouped random-mask controls, not just against earlier discovery
      variants.
@@ -169,11 +416,11 @@ goal, not incidental development mechanics.
    - Counterfactual-adversarial improvements should still clear the current
      fixed/grouped random controls before being promoted to full research
      claims.
-3. Develop factor/token-specific probe interventions.
+4. Develop factor/token-specific probe interventions.
    - Generic adversarial hiding is too blunt for sequence fixtures.
    - Use known factor/token metadata to design targeted intervention losses.
-4. Use group-balanced ERM as a required comparator for any known-group result.
-5. For every serious result, compare against literature reference/SOTA numbers
+5. Use group-balanced ERM as a required comparator for any known-group result.
+6. For every serious result, compare against literature reference/SOTA numbers
    and cite the source; update `docs/literature-context.md` as needed.
 
 ## Current Risks

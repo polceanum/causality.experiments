@@ -1,0 +1,40 @@
+name: waterbirds_features_loss_weighted_dfr
+benchmark:
+  kind: real
+  id: waterbirds
+  comparable_to_literature: true
+  requirements:
+  - Real Waterbirds split semantics.
+  - Metrics report test worst-group accuracy.
+  - Feature extractor/backbone assumptions are documented alongside results.
+  provenance:
+    feature_extractor: torch_hub_resnet50_imagenet1k_v2_penultimate
+    feature_source: official Stanford Waterbirds tarball https://nlp.stanford.edu/data/dro/waterbird_complete95_forest2water2.tar.gz
+      featurized locally by scripts/prepare_waterbirds_features.py
+    split_definition: 'official Stanford Waterbirds metadata split: 0=train, 1=val,
+      2=test'
+seed: 101
+dataset:
+  kind: waterbirds_features
+  path: data/waterbirds/features.csv
+  causal_mask_strategy: label_minus_env_correlation
+  causal_mask_min_margin: 0.01
+  causal_mask_top_k: 512
+method:
+  kind: dfr
+  dfr_epochs: 200
+  dfr_lr: 0.0007
+  dfr_weight_decay: 0.1
+  dfr_balance_groups: true
+  dfr_group_weight_mode: loss_weighted
+  dfr_group_weight_power: 1.0
+training:
+  device: auto
+  epochs: 200
+  batch_size: 64
+  lr: 0.0007
+  weight_decay: 0.1
+metrics:
+- accuracy
+- worst_group_accuracy
+output_dir: outputs/runs

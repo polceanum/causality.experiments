@@ -3,12 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+import numpy as np
 import torch
 from torch import nn
 from torch.nn import functional as F
 from torch.utils.data import DataLoader, TensorDataset, WeightedRandomSampler
 
 from .data import DatasetBundle
+from .sklearn_compat import LogisticRegression, StandardScaler
 
 
 class FittedModel(Protocol):
@@ -403,6 +405,96 @@ class DFRClassifier:
         return self.predict(x)
 
 
+@dataclass
+class OfficialDFRClassifier:
+    weight: torch.Tensor
+    bias: torch.Tensor
+    output_dim: int
+    details: dict[str, Any] | None = None
+
+    def predict(self, x: torch.Tensor) -> torch.Tensor:
+        logits = x.float() @ self.weight.t() + self.bias
+        if self.output_dim == 2 and logits.shape[1] == 1:
+            score = logits[:, 0]
+            return torch.stack([-score, score], dim=1)
+        return logits
+
+    def feature_importance(self) -> torch.Tensor | None:
+        return self.weight.detach().abs().mean(dim=0).cpu()
+
+    def representations(self, x: torch.Tensor) -> torch.Tensor | None:
+        return x.float()
+
+
+@dataclass
+class RepresentationDFRClassifier:
+    encoder: nn.Module
+    classifier: nn.Linear
+    device: torch.device
+
+    def _encode(self, x: torch.Tensor) -> torch.Tensor:
+        self.encoder.eval()
+        with torch.no_grad():
+            return self.encoder.encode(x.to(self.device))
+
+    def predict(self, x: torch.Tensor) -> torch.Tensor:
+        self.classifier.eval()
+        with torch.no_grad():
+            z = self._encode(x)
+            return self.classifier(z).cpu()
+
+    def feature_importance(self) -> torch.Tensor | None:
+        first = next((m for m in self.encoder.modules() if isinstance(m, nn.Linear)), None)
+        if first is None:
+            return None
+        head_importance = self.classifier.weight.detach().abs().mean(dim=0)
+        first_weight = first.weight.detach().abs()
+        if first_weight.shape[0] != head_importance.shape[0]:
+            return None
+        importance = head_importance @ first_weight
+        if isinstance(self.encoder, GatedModel):
+            gate = self.encoder.input_gate.gate().detach().to(importance.device)
+            if gate.shape == importance.shape:
+                importance = importance * gate
+        return importance.cpu()
+
+    def representations(self, x: torch.Tensor) -> torch.Tensor | None:
+        return self.predict(x)
+
+
+@dataclass
+class OfficialRepresentationDFRClassifier:
+    encoder: nn.Module
+    head: OfficialDFRClassifier
+    device: torch.device
+
+    def _encode(self, x: torch.Tensor) -> torch.Tensor:
+        self.encoder.eval()
+        with torch.no_grad():
+            return self.encoder.encode(x.to(self.device)).cpu()
+
+    def predict(self, x: torch.Tensor) -> torch.Tensor:
+        return self.head.predict(self._encode(x))
+
+    def feature_importance(self) -> torch.Tensor | None:
+        first = next((m for m in self.encoder.modules() if isinstance(m, nn.Linear)), None)
+        if first is None:
+            return None
+        head_importance = self.head.weight.detach().abs().mean(dim=0)
+        first_weight = first.weight.detach().abs().to(head_importance.device)
+        if first_weight.shape[0] != head_importance.shape[0]:
+            return None
+        importance = head_importance @ first_weight
+        if isinstance(self.encoder, GatedModel):
+            gate = self.encoder.input_gate.gate().detach().to(importance.device)
+            if gate.shape == importance.shape:
+                importance = importance * gate
+        return importance.cpu()
+
+    def representations(self, x: torch.Tensor) -> torch.Tensor | None:
+        return self._encode(x)
+
+
 def _device(name: str | None) -> torch.device:
     if name in (None, "auto"):
         if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
@@ -473,6 +565,21 @@ def _make_fixed_input_gate(bundle: DatasetBundle, method: dict[str, Any]) -> Fea
     )
 
 
+def _normalized_feature_scores(bundle: DatasetBundle) -> torch.Tensor | None:
+    metadata = bundle.metadata or {}
+    values = metadata.get("causal_feature_scores")
+    if not values:
+        return None
+    scores = torch.tensor(values, dtype=torch.float32)
+    if scores.numel() != bundle.input_dim:
+        raise ValueError("causal_feature_scores must match bundle.input_dim.")
+    score_min = float(scores.min().item())
+    score_max = float(scores.max().item())
+    if score_max <= score_min + 1e-12:
+        return torch.ones_like(scores)
+    return (scores - score_min) / (score_max - score_min)
+
+
 def _feature_score_prior(bundle: DatasetBundle, method: dict[str, Any]) -> torch.Tensor | None:
     if not bool(method.get("input_gate_use_scores", False)):
         return None
@@ -484,6 +591,128 @@ def _feature_score_prior(bundle: DatasetBundle, method: dict[str, Any]) -> torch
     if bundle.causal_mask is not None and prior.shape != bundle.causal_mask.shape:
         return None
     return prior
+
+
+def _score_guided_gate(bundle: DatasetBundle, method: dict[str, Any]) -> torch.Tensor | None:
+    if not bool(method.get("input_gate_score_only", False)):
+        return None
+    scores = _normalized_feature_scores(bundle)
+    if scores is None:
+        raise ValueError("Score-guided gating requires dataset metadata causal_feature_scores.")
+    power = max(float(method.get("input_gate_score_power", 1.0)), 1e-6)
+    scaled_scores = scores.pow(power)
+    causal_weight = float(method.get("causal_input_weight", 1.0))
+    nuisance_weight = float(method.get("nuisance_input_weight", 1.0))
+    return nuisance_weight + (causal_weight - nuisance_weight) * scaled_scores
+
+
+def _balanced_group_example_weights(groups: torch.Tensor, *, power: float = 1.0) -> torch.Tensor:
+    groups = groups.long()
+    counts = torch.bincount(groups)
+    weights = 1.0 / counts.clamp_min(1).float()[groups].pow(power)
+    return weights / weights.mean().clamp_min(1e-12)
+
+
+def _balanced_group_subsample_indices(groups: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+    unique_groups = sorted(int(group) for group in np.unique(groups))
+    if not unique_groups:
+        raise ValueError("Official DFR requires at least one group to subsample.")
+    grouped_indices: list[np.ndarray] = []
+    min_count: int | None = None
+    for group in unique_groups:
+        idx = np.flatnonzero(groups == group)
+        shuffled = np.array(idx, copy=True)
+        rng.shuffle(shuffled)
+        grouped_indices.append(shuffled)
+        count = int(len(shuffled))
+        min_count = count if min_count is None else min(min_count, count)
+    assert min_count is not None
+    return np.concatenate([idx[:min_count] for idx in grouped_indices], axis=0)
+
+
+def _worst_group_accuracy_numpy(pred: np.ndarray, y: np.ndarray, groups: np.ndarray) -> float:
+    scores: list[float] = []
+    for group in sorted(int(group) for group in np.unique(groups)):
+        mask = groups == group
+        if np.any(mask):
+            scores.append(float(np.mean(pred[mask] == y[mask])))
+    if not scores:
+        raise ValueError("Official DFR requires at least one non-empty evaluation group.")
+    return min(scores)
+
+
+def _fit_official_logreg_raw(
+    x_train: np.ndarray,
+    y_train: np.ndarray,
+    *,
+    c_value: float,
+    seed: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    scaler = StandardScaler()
+    x_train_scaled = scaler.fit_transform(x_train)
+    logreg = LogisticRegression(
+        penalty="l1",
+        solver="liblinear",
+        C=float(c_value),
+        max_iter=1000,
+        random_state=seed,
+    )
+    logreg.fit(x_train_scaled, y_train)
+    coef = np.asarray(logreg.coef_, dtype=np.float64)
+    intercept = np.asarray(logreg.intercept_, dtype=np.float64)
+    scale = np.asarray(scaler.scale_, dtype=np.float64)
+    scale[scale == 0.0] = 1.0
+    mean = np.asarray(scaler.mean_, dtype=np.float64)
+    raw_coef = coef / scale[None, :]
+    raw_intercept = intercept - (coef * (mean / scale)[None, :]).sum(axis=1)
+    return raw_coef, raw_intercept, mean, scale
+
+
+def _official_dfr_c_grid(method: dict[str, Any]) -> list[float]:
+    values = method.get("official_dfr_c_grid", [1.0, 0.7, 0.3, 0.1, 0.07, 0.03, 0.01])
+    grid = [float(value) for value in values]
+    if not grid:
+        raise ValueError("official_dfr_c_grid must contain at least one C value.")
+    return grid
+
+
+def _official_dfr_val_split(
+    x_val: np.ndarray,
+    y_val: np.ndarray,
+    g_val: np.ndarray,
+    *,
+    seed: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    idx = np.arange(len(x_val))
+    rng = np.random.default_rng(seed)
+    rng.shuffle(idx)
+    split_at = len(idx) // 2
+    eval_idx = idx[:split_at]
+    retrain_idx = idx[split_at:]
+    return (
+        x_val[retrain_idx],
+        y_val[retrain_idx],
+        g_val[retrain_idx],
+        x_val[eval_idx],
+        y_val[eval_idx],
+        g_val[eval_idx],
+        retrain_idx,
+    )
+
+
+def _soft_nuisance_mask_from_scores(bundle: DatasetBundle) -> torch.Tensor:
+    values = (bundle.metadata or {}).get("causal_feature_scores")
+    if not values:
+        raise ValueError("Soft-score Causal DFR requires dataset metadata causal_feature_scores.")
+    scores = torch.tensor(values, dtype=torch.float32)
+    if scores.numel() != bundle.input_dim:
+        raise ValueError("Soft-score Causal DFR requires causal_feature_scores to match input_dim.")
+    score_min = scores.min()
+    score_max = scores.max()
+    if torch.isclose(score_min, score_max):
+        raise ValueError("Soft-score Causal DFR requires non-constant causal_feature_scores.")
+    normalized = (scores - score_min) / (score_max - score_min)
+    return 1.0 - normalized
 
 
 def fit_constant(bundle: DatasetBundle, config: dict[str, Any]) -> ConstantModel:
@@ -510,22 +739,43 @@ def _fit_validation_split_dfr(
     torch.manual_seed(seed)
     device = _device(str(training.get("device", "auto")))
     split_name = str(method.get("dfr_split", "val"))
-    split = bundle.split(split_name)
+    split_names = [part.strip() for chunk in split_name.split(",") for part in chunk.split("+") if part.strip()]
+    if len(split_names) > 1:
+        split = {
+            key: torch.cat([bundle.split(name)[key] for name in split_names], dim=0)
+            for key in ("x", "y", "env", "group")
+        }
+    else:
+        split = bundle.split(split_names[0] if split_names else split_name)
     x = split["x"]
     y = split["y"]
-    dataset = TensorDataset(x, y)
+    example_weights = torch.ones(len(y), dtype=torch.float32)
     generator = torch.Generator().manual_seed(seed)
     batch_size = int(method.get("dfr_batch_size", training.get("batch_size", 64)))
-    if bool(method.get("dfr_balance_groups", True)):
+    balance_groups = bool(method.get("dfr_balance_groups", True))
+    group_weight_mode = str(method.get("dfr_group_weight_mode", "sampler")).strip().lower()
+    if group_weight_mode in {"weighted_loss", "loss"}:
+        group_weight_mode = "loss_weighted"
+    if group_weight_mode not in {"sampler", "loss_weighted"}:
+        raise ValueError("dfr_group_weight_mode must be 'sampler' or 'loss_weighted'.")
+    group_weight_power = float(method.get("dfr_group_weight_power", 1.0))
+    if group_weight_power < 0.0:
+        raise ValueError("dfr_group_weight_power must be non-negative.")
+    if balance_groups:
         groups = split["group"]
-        counts = torch.bincount(groups.long())
-        weights = 1.0 / counts.clamp_min(1).float()[groups.long()]
+        group_weights = _balanced_group_example_weights(groups, power=group_weight_power)
+
+    if balance_groups and group_weight_mode == "loss_weighted":
+        example_weights = group_weights
+
+    dataset = TensorDataset(x, y, example_weights)
+    if balance_groups and group_weight_mode == "sampler":
         loader = DataLoader(
             dataset,
             batch_size=batch_size,
             sampler=WeightedRandomSampler(
-                weights=weights,
-                num_samples=len(weights),
+                weights=group_weights,
+                num_samples=len(group_weights),
                 replacement=True,
                 generator=generator,
             ),
@@ -538,29 +788,328 @@ def _fit_validation_split_dfr(
             generator=generator,
         )
     classifier = nn.Linear(bundle.input_dim, bundle.output_dim).to(device)
+    epochs = int(method.get("dfr_epochs", training.get("epochs", 100)))
+    clip_grad = float(training.get("clip_grad", 1.0))
+    nuisance_weight = float(method.get("causal_dfr_nuisance_weight", method.get("nuisance_weight", 0.0)))
+    nuisance = nuisance_mask.to(device) if nuisance_mask is not None else None
+    consistency_weight = float(method.get("dfr_counterfactual_consistency_weight", 0.0))
+    if consistency_weight > 0.0 and bundle.causal_mask is None:
+        raise ValueError("DFR counterfactual consistency requires dataset.causal_mask.")
+    optimizer_name = str(method.get("dfr_optimizer", "adam")).strip().lower()
+    if optimizer_name == "lbfgs":
+        if consistency_weight > 0.0:
+            raise ValueError("DFR LBFGS optimizer does not support counterfactual consistency.")
+        x_full = x.to(device)
+        y_full = y.to(device)
+        w_full = example_weights.to(device)
+        lbfgs = torch.optim.LBFGS(
+            classifier.parameters(),
+            lr=float(method.get("dfr_lr", training.get("lr", 1.0))),
+            max_iter=epochs,
+            line_search_fn="strong_wolfe",
+        )
+        l2_weight = float(method.get("dfr_weight_decay", training.get("weight_decay", 0.0)))
+
+        def closure() -> torch.Tensor:
+            lbfgs.zero_grad(set_to_none=True)
+            logits = classifier(x_full)
+            loss = (F.cross_entropy(logits, y_full, reduction="none") * w_full).mean()
+            if l2_weight > 0.0:
+                loss = loss + l2_weight * classifier.weight.pow(2).mean()
+            if nuisance is not None and nuisance_weight > 0.0:
+                loss = loss + nuisance_weight * (classifier.weight * nuisance.unsqueeze(0)).pow(2).mean()
+            loss.backward()
+            return loss
+
+        classifier.train()
+        lbfgs.step(closure)
+        return DFRClassifier(classifier, device)
+    if optimizer_name != "adam":
+        raise ValueError("dfr_optimizer must be 'adam' or 'lbfgs'.")
     opt = torch.optim.Adam(
         classifier.parameters(),
         lr=float(method.get("dfr_lr", training.get("lr", 1e-3))),
         weight_decay=float(method.get("dfr_weight_decay", training.get("weight_decay", 0.0))),
     )
-    epochs = int(method.get("dfr_epochs", training.get("epochs", 100)))
-    clip_grad = float(training.get("clip_grad", 1.0))
-    nuisance_weight = float(method.get("causal_dfr_nuisance_weight", method.get("nuisance_weight", 0.0)))
-    nuisance = nuisance_mask.to(device) if nuisance_mask is not None else None
     for _ in range(epochs):
         classifier.train()
-        for xb, yb in loader:
+        for xb, yb, wb in loader:
             xb = xb.to(device)
             yb = yb.to(device)
+            wb = wb.to(device)
             opt.zero_grad(set_to_none=True)
-            loss = F.cross_entropy(classifier(xb), yb)
+            logits = classifier(xb)
+            per_example_loss = F.cross_entropy(logits, yb, reduction="none")
+            loss = (per_example_loss * wb).mean()
             if nuisance is not None and nuisance_weight > 0.0:
                 loss = loss + nuisance_weight * (classifier.weight * nuisance.unsqueeze(0)).pow(2).mean()
+            if consistency_weight > 0.0:
+                cf_logits = classifier(_counterfactual_batch(bundle, xb))
+                consistency_loss = (logits - cf_logits).pow(2).mean()
+                loss = loss + consistency_weight * consistency_loss
             loss.backward()
             if clip_grad > 0:
                 nn.utils.clip_grad_norm_(classifier.parameters(), clip_grad)
             opt.step()
     return DFRClassifier(classifier, device)
+
+
+def _encode_splits_for_dfr(
+    bundle: DatasetBundle,
+    encoder: nn.Module,
+    device: torch.device,
+    *,
+    batch_size: int,
+) -> DatasetBundle:
+    encoder.eval()
+    encoded_splits: dict[str, dict[str, torch.Tensor]] = {}
+    repr_dim: int | None = None
+    for split_name, split in bundle.splits.items():
+        chunks: list[torch.Tensor] = []
+        x = split["x"]
+        with torch.no_grad():
+            for start in range(0, len(x), batch_size):
+                xb = x[start : start + batch_size].to(device)
+                chunks.append(encoder.encode(xb).cpu())
+        z = torch.cat(chunks, dim=0)
+        repr_dim = z.shape[1]
+        encoded_splits[split_name] = {
+            "x": z,
+            "y": split["y"],
+            "env": split["env"],
+            "group": split["group"],
+        }
+    if repr_dim is None:
+        raise ValueError("Representation DFR requires at least one non-empty split.")
+    return DatasetBundle(
+        name=f"{bundle.name}_representations",
+        task=bundle.task,
+        splits=encoded_splits,
+        input_dim=repr_dim,
+        output_dim=bundle.output_dim,
+        causal_mask=None,
+        metadata={**(bundle.metadata or {}), "representation_source": bundle.name},
+    )
+
+
+def fit_representation_dfr(bundle: DatasetBundle, config: dict[str, Any]) -> RepresentationDFRClassifier:
+    method = dict(config.get("method", {}))
+    training = dict(config.get("training", {}))
+    representation_method = str(method.get("representation_method", "erm"))
+    if representation_method in {"dfr", "causal_dfr", "representation_dfr", "rep_dfr"}:
+        raise ValueError("Representation DFR requires a trainable encoder method, not another DFR method.")
+    representation_config = {
+        **config,
+        "method": {
+            **method,
+            **dict(method.get("representation_method_config", {})),
+            "kind": representation_method,
+        },
+        "training": {
+            **training,
+            **dict(method.get("representation_training", {})),
+        },
+    }
+    if "representation_epochs" in method:
+        representation_config["training"]["epochs"] = int(method["representation_epochs"])
+    if "representation_lr" in method:
+        representation_config["training"]["lr"] = float(method["representation_lr"])
+    if "representation_weight_decay" in method:
+        representation_config["training"]["weight_decay"] = float(method["representation_weight_decay"])
+    stage1 = fit_method(bundle, representation_config)
+    encoder = getattr(stage1, "model", None)
+    if encoder is None or not hasattr(encoder, "encode"):
+        raise ValueError(f"Representation DFR encoder method {representation_method!r} does not expose encode().")
+    device = _device(str(representation_config["training"].get("device", "auto")))
+    encoded = _encode_splits_for_dfr(
+        bundle,
+        encoder,
+        device,
+        batch_size=int(method.get("representation_batch_size", training.get("batch_size", 64))),
+    )
+    head = _fit_validation_split_dfr(encoded, config)
+    return RepresentationDFRClassifier(encoder, head.classifier, head.device)
+
+
+def _fit_official_dfr_on_bundle(bundle: DatasetBundle, config: dict[str, Any]) -> OfficialDFRClassifier:
+    method = dict(config.get("method", {}))
+    seed = int(config.get("seed", 0))
+    balance_val = bool(method.get("official_dfr_balance_val", True))
+    add_train = bool(method.get("official_dfr_add_train", False))
+    num_retrains = int(method.get("official_dfr_num_retrains", 20))
+    if num_retrains <= 0:
+        raise ValueError("official_dfr_num_retrains must be positive.")
+    c_grid = _official_dfr_c_grid(method)
+
+    train = bundle.split("train")
+    val = bundle.split("val")
+    train_x = train["x"].cpu().numpy().astype(np.float64, copy=False)
+    train_y = train["y"].cpu().numpy().astype(np.int64, copy=False)
+    val_x = val["x"].cpu().numpy().astype(np.float64, copy=False)
+    val_y = val["y"].cpu().numpy().astype(np.int64, copy=False)
+    val_g = val["group"].cpu().numpy().astype(np.int64, copy=False)
+
+    retrain_x, retrain_y, retrain_g, tune_x, tune_y, tune_g, retrain_idx = _official_dfr_val_split(
+        val_x,
+        val_y,
+        val_g,
+        seed=seed,
+    )
+    tune_rng = np.random.default_rng(seed)
+    balanced_retrain_idx = np.arange(len(retrain_x))
+    if balance_val:
+        balanced_retrain_idx = _balanced_group_subsample_indices(retrain_g, tune_rng)
+    balanced_retrain_x = retrain_x[balanced_retrain_idx]
+    balanced_retrain_y = retrain_y[balanced_retrain_idx]
+    balanced_retrain_g = retrain_g[balanced_retrain_idx]
+
+    tune_fit_x = balanced_retrain_x
+    tune_fit_y = balanced_retrain_y
+    if add_train:
+        train_take = len(balanced_retrain_x)
+        tune_fit_x = np.concatenate([train_x[:train_take], balanced_retrain_x], axis=0)
+        tune_fit_y = np.concatenate([train_y[:train_take], balanced_retrain_y], axis=0)
+
+    best_c = c_grid[0]
+    best_wga = float("-inf")
+    best_tune_scaler_mean: list[float] | None = None
+    best_tune_scaler_scale: list[float] | None = None
+    for c_value in c_grid:
+        raw_coef, raw_intercept, scaler_mean, scaler_scale = _fit_official_logreg_raw(
+            tune_fit_x,
+            tune_fit_y,
+            c_value=c_value,
+            seed=seed,
+        )
+        score = tune_x @ raw_coef.T + raw_intercept
+        pred = (score[:, 0] > 0.0).astype(np.int64) if score.shape[1] == 1 else np.argmax(score, axis=1)
+        worst_acc = _worst_group_accuracy_numpy(pred, tune_y, tune_g)
+        if worst_acc > best_wga:
+            best_wga = worst_acc
+            best_c = c_value
+            best_tune_scaler_mean = scaler_mean.tolist()
+            best_tune_scaler_scale = scaler_scale.tolist()
+
+    raw_coefs: list[np.ndarray] = []
+    raw_intercepts: list[np.ndarray] = []
+    retrain_details: list[dict[str, Any]] = []
+    for offset in range(num_retrains):
+        rng = np.random.default_rng(seed + offset)
+        selected_val_idx = np.arange(len(val_x))
+        final_x = val_x
+        final_y = val_y
+        final_g = val_g
+        if balance_val:
+            selected_val_idx = _balanced_group_subsample_indices(final_g, rng)
+            final_x = final_x[selected_val_idx]
+            final_y = final_y[selected_val_idx]
+            final_g = final_g[selected_val_idx]
+        fit_x = final_x
+        fit_y = final_y
+        train_subset_idx: np.ndarray = np.array([], dtype=np.int64)
+        if add_train:
+            train_take = len(final_x)
+            train_subset_idx = np.arange(len(train_x))
+            rng.shuffle(train_subset_idx)
+            train_subset_idx = train_subset_idx[:train_take]
+            fit_x = np.concatenate([train_x[train_subset_idx], final_x], axis=0)
+            fit_y = np.concatenate([train_y[train_subset_idx], final_y], axis=0)
+        raw_coef, raw_intercept, scaler_mean, scaler_scale = _fit_official_logreg_raw(
+            fit_x,
+            fit_y,
+            c_value=best_c,
+            seed=seed + offset,
+        )
+        raw_coefs.append(raw_coef)
+        raw_intercepts.append(raw_intercept)
+        retrain_details.append(
+            {
+                "val_indices": selected_val_idx.tolist(),
+                "val_group_counts": {
+                    int(group): int(np.sum(final_g == group))
+                    for group in sorted(int(group) for group in np.unique(final_g))
+                },
+                "train_indices": train_subset_idx.tolist(),
+                "scaler_mean": scaler_mean.tolist(),
+                "scaler_scale": scaler_scale.tolist(),
+            }
+        )
+
+    mean_weight = torch.tensor(np.mean(raw_coefs, axis=0), dtype=torch.float32)
+    mean_bias = torch.tensor(np.mean(raw_intercepts, axis=0), dtype=torch.float32)
+    return OfficialDFRClassifier(
+        weight=mean_weight,
+        bias=mean_bias,
+        output_dim=bundle.output_dim,
+        details={
+            "official_dfr_best_c": float(best_c),
+            "official_dfr_best_tune_wga": float(best_wga),
+            "official_dfr_balance_val": balance_val,
+            "official_dfr_add_train": add_train,
+            "official_dfr_num_retrains": num_retrains,
+            "official_dfr_tune_val_indices": retrain_idx[balanced_retrain_idx].tolist(),
+            "official_dfr_tune_val_group_counts": {
+                int(group): int(np.sum(balanced_retrain_g == group))
+                for group in sorted(int(group) for group in np.unique(balanced_retrain_g))
+            },
+            "official_dfr_tune_scaler_mean": best_tune_scaler_mean,
+            "official_dfr_tune_scaler_scale": best_tune_scaler_scale,
+            "official_dfr_retrains": retrain_details,
+        },
+    )
+
+
+def fit_official_dfr_val_tr(bundle: DatasetBundle, config: dict[str, Any]) -> OfficialDFRClassifier:
+    return _fit_official_dfr_on_bundle(bundle, config)
+
+
+def fit_official_representation_dfr(
+    bundle: DatasetBundle,
+    config: dict[str, Any],
+) -> OfficialRepresentationDFRClassifier:
+    method = dict(config.get("method", {}))
+    training = dict(config.get("training", {}))
+    representation_method = str(method.get("representation_method", "erm"))
+    if representation_method in {
+        "dfr",
+        "causal_dfr",
+        "official_dfr_val_tr",
+        "official_representation_dfr",
+        "representation_dfr",
+        "rep_dfr",
+    }:
+        raise ValueError("Official representation DFR requires a trainable encoder method, not another DFR method.")
+    representation_config = {
+        **config,
+        "method": {
+            **method,
+            **dict(method.get("representation_method_config", {})),
+            "kind": representation_method,
+        },
+        "training": {
+            **training,
+            **dict(method.get("representation_training", {})),
+        },
+    }
+    if "representation_epochs" in method:
+        representation_config["training"]["epochs"] = int(method["representation_epochs"])
+    if "representation_lr" in method:
+        representation_config["training"]["lr"] = float(method["representation_lr"])
+    if "representation_weight_decay" in method:
+        representation_config["training"]["weight_decay"] = float(method["representation_weight_decay"])
+    stage1 = fit_method(bundle, representation_config)
+    encoder = getattr(stage1, "model", None)
+    if encoder is None or not hasattr(encoder, "encode"):
+        raise ValueError(f"Representation DFR encoder method {representation_method!r} does not expose encode().")
+    device = _device(str(representation_config["training"].get("device", "auto")))
+    encoded = _encode_splits_for_dfr(
+        bundle,
+        encoder,
+        device,
+        batch_size=int(method.get("representation_batch_size", training.get("batch_size", 64))),
+    )
+    head = _fit_official_dfr_on_bundle(encoded, config)
+    return OfficialRepresentationDFRClassifier(encoder=encoder, head=head, device=device)
 
 
 def fit_dfr(bundle: DatasetBundle, config: dict[str, Any]) -> DFRClassifier:
@@ -572,7 +1121,14 @@ def fit_causal_dfr(bundle: DatasetBundle, config: dict[str, Any]) -> DFRClassifi
         raise ValueError("Causal DFR requires dataset.causal_mask.")
     if bundle.causal_mask.numel() != bundle.input_dim:
         raise ValueError("Causal DFR requires dataset.causal_mask to match input_dim.")
-    nuisance_mask = 1.0 - bundle.causal_mask.float()
+    method = dict(config.get("method", {}))
+    nuisance_prior = str(method.get("causal_dfr_nuisance_prior", "mask")).strip().lower()
+    if nuisance_prior in {"mask", "hard_mask"}:
+        nuisance_mask = 1.0 - bundle.causal_mask.float()
+    elif nuisance_prior in {"soft_scores", "scores"}:
+        nuisance_mask = _soft_nuisance_mask_from_scores(bundle)
+    else:
+        raise ValueError("causal_dfr_nuisance_prior must be 'mask' or 'soft_scores'.")
     return _fit_validation_split_dfr(bundle, config, nuisance_mask=nuisance_mask)
 
 
@@ -825,6 +1381,11 @@ def fit_adversarial_probe(bundle: DatasetBundle, config: dict[str, Any]) -> Torc
     epochs = int(training.get("epochs", 30))
     adv_weight = float(method.get("adv_weight", 0.2))
     nuisance_loss_weight = float(method.get("nuisance_loss_weight", 1.0))
+    nuisance_penalty_weight = float(method.get("representation_nuisance_penalty_weight", 0.0))
+    core_margin_weight = float(method.get("representation_core_margin_weight", 1.0))
+    normalized_scores = _normalized_feature_scores(bundle)
+    if nuisance_penalty_weight > 0.0 and normalized_scores is None:
+        raise ValueError("representation_nuisance_penalty_weight requires dataset metadata causal_feature_scores.")
     clip_grad = float(training.get("clip_grad", 1.0))
     for _ in range(epochs):
         model.train()
@@ -834,10 +1395,24 @@ def fit_adversarial_probe(bundle: DatasetBundle, config: dict[str, Any]) -> Torc
             yb = yb.to(device)
             envb = envb.to(device)
             opt.zero_grad(set_to_none=True)
-            z = model.encode(xb)
-            label_loss = F.cross_entropy(model(xb), yb)
+            x_main = _apply_causal_input_gate(bundle, xb, method)
+            z = model.encode(x_main)
+            label_loss = F.cross_entropy(model(x_main), yb)
             nuisance_loss = F.cross_entropy(nuisance_head(_grad_reverse(z, adv_weight)), envb)
             loss = label_loss + nuisance_loss_weight * nuisance_loss
+            if nuisance_penalty_weight > 0.0 and normalized_scores is not None:
+                first = next((module for module in model.modules() if isinstance(module, nn.Linear)), None)
+                if first is None:
+                    raise ValueError("representation_nuisance_penalty_weight requires a linear input layer.")
+                feature_importance = first.weight.abs().mean(dim=0)
+                score_tensor = normalized_scores.to(feature_importance.device)
+                nuisance_scores = 1.0 - score_tensor
+                core_scores = score_tensor
+                nuisance_term = (feature_importance * nuisance_scores).mean()
+                core_term = (feature_importance * core_scores).mean()
+                loss = loss + nuisance_penalty_weight * (
+                    nuisance_term + core_margin_weight * F.relu(nuisance_term - core_term)
+                )
             loss.backward()
             if clip_grad > 0:
                 nn.utils.clip_grad_norm_(
@@ -1010,6 +1585,9 @@ def _apply_causal_input_gate(
     xb: torch.Tensor,
     method: dict[str, Any],
 ) -> torch.Tensor:
+    score_gate = _score_guided_gate(bundle, method)
+    if score_gate is not None:
+        return xb * score_gate.to(xb.device)
     if bundle.causal_mask is None or _is_sequence(bundle) or _uses_learned_input_gate(method):
         return xb
     input_gate = _make_fixed_input_gate(bundle, method)
@@ -1307,7 +1885,11 @@ METHODS = {
     "oracle": fit_oracle,
     "erm": fit_erm,
     "dfr": fit_dfr,
+    "official_dfr_val_tr": fit_official_dfr_val_tr,
+    "official_representation_dfr": fit_official_representation_dfr,
     "causal_dfr": fit_causal_dfr,
+    "representation_dfr": fit_representation_dfr,
+    "rep_dfr": fit_representation_dfr,
     "group_balanced_erm": fit_group_balanced_erm,
     "group_dro": fit_group_dro,
     "irm": fit_irm,

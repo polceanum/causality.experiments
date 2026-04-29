@@ -209,6 +209,10 @@ def test_method_sweep_accepts_derived_causal_mask_strategy() -> None:
 def test_alignment_suffix_parsing_keeps_causal_dfr_distinct() -> None:
     assert _experiment_name("waterbirds_features_causal_dfr") == "waterbirds_features"
     assert _experiment_name("waterbirds_features_dfr") == "waterbirds_features"
+    assert _experiment_name("waterbirds_features_official_dfr_val_tr") == "waterbirds_features"
+    assert _experiment_name("waterbirds_features_counterfactual_causal_dfr") == "waterbirds_features"
+    assert _experiment_name("waterbirds_features_loss_weighted_dfr") == "waterbirds_features"
+    assert _experiment_name("waterbirds_features_representation_dfr") == "waterbirds_features"
     assert _experiment_name("waterbirds_features_causal_dfr") != "waterbirds_features_causal"
 
 
