@@ -647,9 +647,15 @@ def _fit_official_logreg_raw(
     *,
     c_value: float,
     seed: int,
+    feature_scale: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     scaler = StandardScaler()
     x_train_scaled = scaler.fit_transform(x_train)
+    if feature_scale is None:
+        feature_scale = np.ones(x_train.shape[1], dtype=np.float64)
+    if feature_scale.shape != (x_train.shape[1],):
+        raise ValueError("feature_scale must match x_train feature dimension.")
+    x_train_scaled = x_train_scaled * feature_scale[None, :]
     logreg = LogisticRegression(
         penalty="l1",
         solver="liblinear",
@@ -663,8 +669,9 @@ def _fit_official_logreg_raw(
     scale = np.asarray(scaler.scale_, dtype=np.float64)
     scale[scale == 0.0] = 1.0
     mean = np.asarray(scaler.mean_, dtype=np.float64)
-    raw_coef = coef / scale[None, :]
-    raw_intercept = intercept - (coef * (mean / scale)[None, :]).sum(axis=1)
+    effective_coef = coef * feature_scale[None, :]
+    raw_coef = effective_coef / scale[None, :]
+    raw_intercept = intercept - (effective_coef * (mean / scale)[None, :]).sum(axis=1)
     return raw_coef, raw_intercept, mean, scale
 
 
@@ -698,6 +705,43 @@ def _official_dfr_val_split(
         g_val[eval_idx],
         retrain_idx,
     )
+
+
+def _official_causal_shrink_grid(bundle: DatasetBundle, method: dict[str, Any]) -> list[tuple[float, np.ndarray]]:
+    if bundle.causal_mask is None:
+        raise ValueError("Official causal-shrink DFR requires dataset.causal_mask.")
+    if bundle.causal_mask.numel() != bundle.input_dim:
+        raise ValueError("Official causal-shrink DFR requires dataset.causal_mask to match input_dim.")
+    raw_values = method.get("official_causal_shrink_grid", [1.0, 0.75, 0.5, 0.25])
+    shrink_values = [float(value) for value in raw_values]
+    if not shrink_values:
+        raise ValueError("official_causal_shrink_grid must contain at least one value.")
+    if not any(np.isclose(value, 1.0) for value in shrink_values):
+        shrink_values = [1.0, *shrink_values]
+    prior = str(method.get("official_causal_shrink_prior", "mask")).strip().lower()
+    if prior in {"mask", "hard_mask"}:
+        causal_score = bundle.causal_mask.float().cpu().numpy().astype(np.float64, copy=False)
+    elif prior in {"soft_scores", "scores"}:
+        values = (bundle.metadata or {}).get("causal_feature_scores")
+        if not values:
+            raise ValueError("Soft-score official causal-shrink DFR requires dataset metadata causal_feature_scores.")
+        scores = np.asarray(values, dtype=np.float64)
+        if scores.shape != (bundle.input_dim,):
+            raise ValueError("Soft-score official causal-shrink DFR requires causal_feature_scores to match input_dim.")
+        score_min = float(np.min(scores))
+        score_max = float(np.max(scores))
+        if score_max <= score_min + 1e-12:
+            raise ValueError("Soft-score official causal-shrink DFR requires non-constant causal_feature_scores.")
+        causal_score = (scores - score_min) / (score_max - score_min)
+    else:
+        raise ValueError("official_causal_shrink_prior must be 'mask' or 'soft_scores'.")
+    feature_scales: list[tuple[float, np.ndarray]] = []
+    for shrink in shrink_values:
+        if shrink < 0.0:
+            raise ValueError("official_causal_shrink_grid values must be non-negative.")
+        scale = causal_score + shrink * (1.0 - causal_score)
+        feature_scales.append((float(shrink), np.asarray(scale, dtype=np.float64)))
+    return feature_scales
 
 
 def _soft_nuisance_mask_from_scores(bundle: DatasetBundle) -> torch.Tensor:
@@ -931,7 +975,12 @@ def fit_representation_dfr(bundle: DatasetBundle, config: dict[str, Any]) -> Rep
     return RepresentationDFRClassifier(encoder, head.classifier, head.device)
 
 
-def _fit_official_dfr_on_bundle(bundle: DatasetBundle, config: dict[str, Any]) -> OfficialDFRClassifier:
+def _fit_official_dfr_on_bundle(
+    bundle: DatasetBundle,
+    config: dict[str, Any],
+    *,
+    feature_scale_grid: list[tuple[float, np.ndarray]] | None = None,
+) -> OfficialDFRClassifier:
     method = dict(config.get("method", {}))
     seed = int(config.get("seed", 0))
     balance_val = bool(method.get("official_dfr_balance_val", True))
@@ -940,6 +989,13 @@ def _fit_official_dfr_on_bundle(bundle: DatasetBundle, config: dict[str, Any]) -
     if num_retrains <= 0:
         raise ValueError("official_dfr_num_retrains must be positive.")
     c_grid = _official_dfr_c_grid(method)
+    if feature_scale_grid is None:
+        feature_scale_grid = [(1.0, np.ones(bundle.input_dim, dtype=np.float64))]
+    if not feature_scale_grid:
+        raise ValueError("feature_scale_grid must contain at least one feature scale.")
+    for _, feature_scale in feature_scale_grid:
+        if feature_scale.shape != (bundle.input_dim,):
+            raise ValueError("feature_scale_grid entries must match bundle.input_dim.")
 
     train = bundle.split("train")
     val = bundle.split("val")
@@ -971,24 +1027,30 @@ def _fit_official_dfr_on_bundle(bundle: DatasetBundle, config: dict[str, Any]) -
         tune_fit_y = np.concatenate([train_y[:train_take], balanced_retrain_y], axis=0)
 
     best_c = c_grid[0]
+    best_feature_scale_label = float(feature_scale_grid[0][0])
+    best_feature_scale = feature_scale_grid[0][1]
     best_wga = float("-inf")
     best_tune_scaler_mean: list[float] | None = None
     best_tune_scaler_scale: list[float] | None = None
-    for c_value in c_grid:
-        raw_coef, raw_intercept, scaler_mean, scaler_scale = _fit_official_logreg_raw(
-            tune_fit_x,
-            tune_fit_y,
-            c_value=c_value,
-            seed=seed,
-        )
-        score = tune_x @ raw_coef.T + raw_intercept
-        pred = (score[:, 0] > 0.0).astype(np.int64) if score.shape[1] == 1 else np.argmax(score, axis=1)
-        worst_acc = _worst_group_accuracy_numpy(pred, tune_y, tune_g)
-        if worst_acc > best_wga:
-            best_wga = worst_acc
-            best_c = c_value
-            best_tune_scaler_mean = scaler_mean.tolist()
-            best_tune_scaler_scale = scaler_scale.tolist()
+    for feature_scale_label, feature_scale in feature_scale_grid:
+        for c_value in c_grid:
+            raw_coef, raw_intercept, scaler_mean, scaler_scale = _fit_official_logreg_raw(
+                tune_fit_x,
+                tune_fit_y,
+                c_value=c_value,
+                seed=seed,
+                feature_scale=feature_scale,
+            )
+            score = tune_x @ raw_coef.T + raw_intercept
+            pred = (score[:, 0] > 0.0).astype(np.int64) if score.shape[1] == 1 else np.argmax(score, axis=1)
+            worst_acc = _worst_group_accuracy_numpy(pred, tune_y, tune_g)
+            if worst_acc > best_wga:
+                best_wga = worst_acc
+                best_c = c_value
+                best_feature_scale_label = float(feature_scale_label)
+                best_feature_scale = feature_scale
+                best_tune_scaler_mean = scaler_mean.tolist()
+                best_tune_scaler_scale = scaler_scale.tolist()
 
     raw_coefs: list[np.ndarray] = []
     raw_intercepts: list[np.ndarray] = []
@@ -1019,6 +1081,7 @@ def _fit_official_dfr_on_bundle(bundle: DatasetBundle, config: dict[str, Any]) -
             fit_y,
             c_value=best_c,
             seed=seed + offset,
+            feature_scale=best_feature_scale,
         )
         raw_coefs.append(raw_coef)
         raw_intercepts.append(raw_intercept)
@@ -1043,6 +1106,7 @@ def _fit_official_dfr_on_bundle(bundle: DatasetBundle, config: dict[str, Any]) -
         output_dim=bundle.output_dim,
         details={
             "official_dfr_best_c": float(best_c),
+            "official_dfr_best_feature_scale": float(best_feature_scale_label),
             "official_dfr_best_tune_wga": float(best_wga),
             "official_dfr_balance_val": balance_val,
             "official_dfr_add_train": add_train,
@@ -1061,6 +1125,15 @@ def _fit_official_dfr_on_bundle(bundle: DatasetBundle, config: dict[str, Any]) -
 
 def fit_official_dfr_val_tr(bundle: DatasetBundle, config: dict[str, Any]) -> OfficialDFRClassifier:
     return _fit_official_dfr_on_bundle(bundle, config)
+
+
+def fit_official_causal_shrink_dfr_val_tr(bundle: DatasetBundle, config: dict[str, Any]) -> OfficialDFRClassifier:
+    method = dict(config.get("method", {}))
+    return _fit_official_dfr_on_bundle(
+        bundle,
+        config,
+        feature_scale_grid=_official_causal_shrink_grid(bundle, method),
+    )
 
 
 def fit_official_representation_dfr(
@@ -1886,6 +1959,7 @@ METHODS = {
     "erm": fit_erm,
     "dfr": fit_dfr,
     "official_dfr_val_tr": fit_official_dfr_val_tr,
+    "official_causal_shrink_dfr_val_tr": fit_official_causal_shrink_dfr_val_tr,
     "official_representation_dfr": fit_official_representation_dfr,
     "causal_dfr": fit_causal_dfr,
     "representation_dfr": fit_representation_dfr,

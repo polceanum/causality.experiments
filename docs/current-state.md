@@ -193,12 +193,47 @@ goal, not incidental development mechanics.
   literature DFR reference `0.929`. This closes the earlier protocol gap: the
   benchmark problem is no longer “why is local DFR below reported DFR,” but
   “which mechanism can reliably beat the official local comparator.”
+- The official comparator audit found one meaningful protocol update. Raising
+  `official_dfr_num_retrains` from `20` to `50` increased paired test WGA on
+  seeds `101`-`103` from about `0.9315` to about `0.9330`, with a consistent
+  paired delta of about `+0.0016`; adding train examples to DFR hurt, averaging
+  about `0.9232` test WGA. Treat `official_dfr_val_tr_retrains50` as the
+  stronger local comparator for future Track A promotion decisions, not as a
+  proposed-method win.
 - Official-feature mechanism transfer results are now mixed in a useful way:
   single-seed `causal_dfr` reached about `0.939` test WGA on the official
   feature table, but a seed-matched comparison over seeds `101`-`105` averaged
   about `0.923` test WGA versus about `0.929` for plain `official_dfr_val_tr`.
   Current `causal_dfr` therefore has upside but is not yet a stable win over
   the official comparator.
+- Track A now has a paired official-feature causal DFR runner,
+  `scripts/run_waterbirds_official_causal_dfr_sweep.py`, that reports
+  same-seed official-baseline deltas and streams rows to CSV as each fit
+  completes. A seeds `101`-`103` smoke on the current causal DFR setting
+  reproduced the instability: mean test WGA about `0.9252`, mean paired delta
+  about `-0.0062`, and minimum paired delta about `-0.0140`. The interrupted
+  broader grid showed the same seed101-win/seed102-loss pattern before it was
+  stopped, so broad unpaired-looking causal DFR knob sweeps are not the next
+  best use of compute.
+- A new `official_causal_shrink_dfr_val_tr` method is implemented as a
+  conservative official-protocol extension: it uses the same validation split,
+  C-grid, balanced validation subsampling, and retrain averaging as
+  `official_dfr_val_tr`, but can shrink nuisance dimensions after
+  standardization before the L1 head fit. Shrink `1.0` exactly recovers the
+  official DFR path, and run artifacts now persist `model_details` such as the
+  selected C and shrink value. The first paired three-seed smoke is negative:
+  on seeds `101`-`103`, causal-shrink DFR reached mean test WGA about
+  `0.9299`, mean paired delta about `-0.0016`, and zero non-negative seed
+  deltas versus the locked official comparator. It should not be promoted in
+  its current grid.
+- Softer causal-shrink grids do not yet clear the updated bar. A gentle hard
+  mask grid (`1.0,0.95,0.9,0.85,0.75`) averaged about `0.9315` WGA against the
+  20-retrain comparator, with paired deltas `+0.0016,0.0,-0.0016`; a soft-score
+  prior averaged about `0.9309`. Repeating the gentle hard-mask grid with
+  `official_dfr_num_retrains: 50` averaged about `0.9325` versus the stronger
+  `0.9330` comparator, with paired deltas `-0.0016,0.0,0.0`. Causal shrink
+  lowers nuisance-to-causal importance, but in these settings that diagnostic
+  gain is not a benchmark improvement.
 - Feature-swap `counterfactual_adversarial` remains non-competitive on the
   official feature table. Plain official-feature transfer collapsed to about
   `0.796` test WGA, a nuisance-zero ablation partially repaired it to about
@@ -219,15 +254,19 @@ goal, not incidental development mechanics.
   it.
 - Waterbirds benchmark status should now be read in three tiers:
   - official baseline:
-    `official_dfr_val_tr` on `features_official_erm_official_repro.csv` at about
-    `0.931` test WGA is the locked comparator.
+    `official_dfr_val_tr_retrains50` on
+    `features_official_erm_official_repro.csv` at about `0.933` test WGA is the
+    stronger local comparator; the previous 20-retrain comparator at about
+    `0.931` remains useful for historical continuity only.
   - promising but unstable:
     official-feature `causal_dfr` and any single-seed mechanism variant that
     beats the baseline but does not yet hold up under seed-matched averages.
   - promoted:
     only a candidate with seed-matched mean test WGA above the official
     baseline and acceptable variance should be treated as a real improvement.
-- The repo now has two new official Waterbirds search tracks:
+- The repo now has three official Waterbirds search tracks:
+  - `scripts/run_waterbirds_official_causal_dfr_sweep.py` for seed-matched
+    official-feature causal DFR mask/nuisance sweeps with paired deltas.
   - `scripts/run_waterbirds_official_representation_sweep.py` for seed-matched
     official-feature mechanism sweeps with CSV/JSON summaries.
   - `scripts/run_waterbirds_official_backbone_sweep.py` for official-aligned
@@ -312,6 +351,27 @@ goal, not incidental development mechanics.
   WGA was only `0.53125` and downstream official DFR test WGA fell to `0.75`.
   This is the wrong tradeoff for the current promotion goal; do not launch a
   full env-adv `0.05` e5 run from this evidence.
+- The Track B runner now supports frozen alternate torch-hub and Hugging Face
+  vision backbones with explicit weights/eval-transform tags, while keeping ERM
+  fine-tuning limited to the ResNet path. Available stronger-source diagnostics
+  were negative on the limit384 slice when scored by the stronger
+  `official_dfr_val_tr_retrains50` comparator: frozen ResNet50 ImageNet-V2
+  features with weights transforms reached downstream WGA `0.84375`, frozen
+  ConvNeXt-Tiny ImageNet-V1 features reached `0.8125`, frozen CLIP ViT-B/32
+  features reached `0.625`, and frozen DINOv2-small features reached `0.84375`.
+  Do not scale these frozen sources to full benchmark runs.
+- A stricter training sanity check confirms the Track B ResNet path can train
+  properly when the LR is less aggressive, but this still does not create a
+  downstream win. On the limit384 diagnostic slice, e20/LR `0.0003` completed
+  all 20 epochs with mean train loss falling to about `0.211`; the checkpointed
+  base classifier reached train/test WGA `0.9375`/`0.9375` with balanced label
+  predictions. Exporting penultimate features from that checkpoint and scoring
+  with `official_dfr_val_tr_retrains50` reached only test WGA `0.8125` and test
+  accuracy `0.8359375`. So the current failure is not simply that the model did
+  not train; the trained representation is not helping the DFR head on the
+  diagnostic slice. The full no-limit e20/LR `0.0003` CPU run was stopped after
+  one completed epoch because it was too slow for an interactive local probe;
+  use checkpointed/resumable scheduled runs for any future full-data training.
 - The first new Track A configs are:
   - `waterbirds_features_official_adv_representation_dfr_score_gate`
   - `waterbirds_features_official_adv_representation_dfr_nuisance_regularized`

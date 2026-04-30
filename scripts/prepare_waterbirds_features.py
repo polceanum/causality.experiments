@@ -141,6 +141,84 @@ def build_hub_resnet50(
     return model, transform, extractor_name
 
 
+def build_frozen_hub_backbone(
+    *,
+    backbone_name: str,
+    weights_variant: str = "imagenet1k_v1",
+    eval_transform_style: str = "weights",
+) -> tuple[torch.nn.Module, Any, str]:
+    ensure_torchvision_nms_stub()
+    backbone_key = backbone_name.strip().lower()
+    if backbone_key == "resnet50":
+        model, transform, extractor_name = build_hub_resnet50(
+            weights_variant=weights_variant,
+            eval_transform_style=eval_transform_style,
+        )
+        model.fc = torch.nn.Identity()
+        model.eval()
+        return model, transform, f"{extractor_name}_penultimate"
+    if backbone_key not in {"convnext_tiny", "efficientnet_b0"}:
+        raise ValueError("Frozen hub backbone must be one of: resnet50, convnext_tiny, efficientnet_b0.")
+    variant = weights_variant.strip().lower()
+    weights = None if variant in {"none", "random"} else "IMAGENET1K_V1"
+    model = torch.hub.load("pytorch/vision", backbone_key, weights=weights)
+    if hasattr(model, "classifier") and isinstance(model.classifier, torch.nn.Sequential):
+        modules = list(model.classifier.children())
+        if modules and isinstance(modules[-1], torch.nn.Linear):
+            model.classifier = torch.nn.Sequential(*modules[:-1], torch.nn.Identity())
+        else:
+            raise ValueError(f"Unsupported classifier shape for frozen backbone {backbone_name!r}.")
+    else:
+        raise ValueError(f"Frozen backbone {backbone_name!r} does not expose a supported classifier.")
+    model.eval()
+    transform = imagenet_transform if eval_transform_style in {"official", "weights"} else imagenet_transform
+    suffix = "random" if weights is None else "imagenet1k_v1"
+    return model, transform, f"torch_hub_{backbone_key}_{suffix}_penultimate"
+
+
+class FrozenHuggingFaceVisionBackbone(torch.nn.Module):
+    def __init__(self, model: torch.nn.Module) -> None:
+        super().__init__()
+        self.model = model
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        output = self.model(pixel_values=x)
+        pooled = getattr(output, "pooler_output", None)
+        if pooled is not None:
+            return pooled
+        hidden = getattr(output, "last_hidden_state", None)
+        if hidden is None:
+            raise ValueError("Hugging Face vision model output has no pooler_output or last_hidden_state.")
+        return hidden[:, 0]
+
+
+def build_frozen_hf_vision_backbone(
+    *,
+    model_id: str,
+    local_files_only: bool = False,
+) -> tuple[torch.nn.Module, Any, str]:
+    try:
+        from transformers import AutoImageProcessor, AutoModel, CLIPVisionModel
+    except Exception as exc:
+        raise RuntimeError("Frozen Hugging Face backbones require transformers to be installed.") from exc
+
+    processor = AutoImageProcessor.from_pretrained(model_id, local_files_only=local_files_only)
+    if "clip" in model_id.lower():
+        model = CLIPVisionModel.from_pretrained(model_id, local_files_only=local_files_only)
+    else:
+        model = AutoModel.from_pretrained(model_id, local_files_only=local_files_only)
+    model.eval()
+
+    def transform(image: Image.Image) -> torch.Tensor:
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+        encoded = processor(images=image, return_tensors="pt")
+        return encoded["pixel_values"][0]
+
+    safe_model_id = model_id.replace("/", "_").replace("-", "_").replace(".", "_")
+    return FrozenHuggingFaceVisionBackbone(model), transform, f"hf_{safe_model_id}_vision"
+
+
 def build_train_transform(augment: bool, *, official: bool = False) -> Any:
     if not augment:
         return imagenet_transform
@@ -673,6 +751,7 @@ def extract_protocol_feature_matrix(
     erm_finetune_warmup_mode: str = "head",
     weights_variant: str = "imagenet1k_v2",
     eval_transform_style: str = "weights",
+    backbone_name: str = "resnet50",
     feature_extractor_suffix: str = "",
     erm_finetune_preset: str | None = None,
     training_checkpoint_path: Path | None = None,
@@ -697,11 +776,28 @@ def extract_protocol_feature_matrix(
         feature_extractor_suffix=feature_extractor_suffix,
         erm_finetune_preset=erm_finetune_preset,
     )
-    model, transform, model_name = build_resnet50_model(
-        device,
-        weights_variant=str(settings["weights_variant"]),
-        eval_transform_style=str(settings["eval_transform_style"]),
-    )
+    backbone_key = backbone_name.strip().lower()
+    if int(settings["erm_finetune_epochs"]) > 0 and backbone_key != "resnet50":
+        raise ValueError("ERM fine-tuning is currently supported only for the resnet50 backbone.")
+    if backbone_key == "resnet50":
+        model, transform, model_name = build_resnet50_model(
+            device,
+            weights_variant=str(settings["weights_variant"]),
+            eval_transform_style=str(settings["eval_transform_style"]),
+        )
+    elif backbone_key in {"hf", "hf_auto", "huggingface"}:
+        model, transform, model_name = build_frozen_hf_vision_backbone(
+            model_id=str(settings["weights_variant"]),
+            local_files_only=str(settings["eval_transform_style"]).strip().lower() == "local",
+        )
+        model.to(device)
+    else:
+        model, transform, model_name = build_frozen_hub_backbone(
+            backbone_name=backbone_key,
+            weights_variant=str(settings["weights_variant"]),
+            eval_transform_style=str(settings["eval_transform_style"]),
+        )
+        model.to(device)
     base_metrics: dict[str, float] = {}
     if int(settings["erm_finetune_epochs"]) > 0:
         train_transform = build_train_transform(
@@ -759,7 +855,7 @@ def extract_protocol_feature_matrix(
     else:
         model.fc = torch.nn.Identity()
         model.eval()
-        extractor_name = f"{model_name}_penultimate"
+        extractor_name = model_name if str(model_name).endswith("_penultimate") else f"{model_name}_penultimate"
     return (
         extract_feature_matrix_from_model(
             model,
@@ -771,7 +867,7 @@ def extract_protocol_feature_matrix(
         ),
         extractor_name,
         base_metrics,
-        {**settings, "erm_finetune_preset": (erm_finetune_preset or "")},
+        {**settings, "erm_finetune_preset": (erm_finetune_preset or ""), "backbone_name": backbone_key},
     )
 
 
@@ -858,6 +954,7 @@ def prepare_waterbirds_features_artifact(
     erm_finetune_warmup_mode: str = "head",
     weights_variant: str = "imagenet1k_v2",
     eval_transform_style: str = "weights",
+    backbone_name: str = "resnet50",
     feature_extractor_suffix: str = "",
     erm_finetune_preset: str | None = None,
 ) -> PreparedWaterbirdsFeatures:
@@ -893,6 +990,7 @@ def prepare_waterbirds_features_artifact(
         erm_finetune_warmup_mode=erm_finetune_warmup_mode,
         weights_variant=weights_variant,
         eval_transform_style=eval_transform_style,
+        backbone_name=backbone_name,
         feature_extractor_suffix=feature_extractor_suffix,
         erm_finetune_preset=erm_finetune_preset,
         training_checkpoint_path=training_checkpoint_path,
@@ -955,6 +1053,7 @@ def prepare_waterbirds_features(
     erm_finetune_warmup_mode: str = "head",
     weights_variant: str = "imagenet1k_v2",
     eval_transform_style: str = "weights",
+    backbone_name: str = "resnet50",
     feature_extractor_suffix: str = "",
     erm_finetune_preset: str | None = None,
 ) -> Path:
@@ -984,6 +1083,7 @@ def prepare_waterbirds_features(
         erm_finetune_warmup_mode=erm_finetune_warmup_mode,
         weights_variant=weights_variant,
         eval_transform_style=eval_transform_style,
+        backbone_name=backbone_name,
         feature_extractor_suffix=feature_extractor_suffix,
         erm_finetune_preset=erm_finetune_preset,
     )
@@ -1013,6 +1113,7 @@ def main() -> None:
     parser.add_argument("--erm-finetune-warmup-epochs", type=int, default=0)
     parser.add_argument("--erm-finetune-warmup-mode", choices=("head", "layer4", "all"), default="head")
     parser.add_argument("--erm-finetune-preset", choices=("official",), default=None)
+    parser.add_argument("--backbone-name", default="resnet50")
     parser.add_argument("--force-download", action="store_true")
     parser.add_argument("--force-extract", action="store_true")
     parser.add_argument("--overwrite-features", action="store_true")
@@ -1043,6 +1144,7 @@ def main() -> None:
         erm_finetune_warmup_epochs=args.erm_finetune_warmup_epochs,
         erm_finetune_warmup_mode=args.erm_finetune_warmup_mode,
         erm_finetune_preset=args.erm_finetune_preset,
+        backbone_name=args.backbone_name,
     )
     print(out)
 

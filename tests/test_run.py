@@ -1,7 +1,9 @@
 from pathlib import Path
 import csv
+import pytest
 
 from causality_experiments.run import run_experiment, summarize_runs
+from causality_experiments.reporting import is_ad_hoc_config, write_csv_rows
 from scripts.report_benchmark_alignment import _experiment_name, build_alignment_rows
 from scripts.run_method_sweep import _config_has_causal_mask
 
@@ -210,10 +212,32 @@ def test_alignment_suffix_parsing_keeps_causal_dfr_distinct() -> None:
     assert _experiment_name("waterbirds_features_causal_dfr") == "waterbirds_features"
     assert _experiment_name("waterbirds_features_dfr") == "waterbirds_features"
     assert _experiment_name("waterbirds_features_official_dfr_val_tr") == "waterbirds_features"
+    assert _experiment_name("waterbirds_features_official_causal_shrink_dfr_val_tr") == "waterbirds_features"
+    assert _experiment_name("waterbirds_features_official_dfr_val_tr_retrains50") == "waterbirds_features"
+    assert _experiment_name("waterbirds_features_official_causal_shrink_dfr_val_tr_gentle") == "waterbirds_features"
     assert _experiment_name("waterbirds_features_counterfactual_causal_dfr") == "waterbirds_features"
     assert _experiment_name("waterbirds_features_loss_weighted_dfr") == "waterbirds_features"
     assert _experiment_name("waterbirds_features_representation_dfr") == "waterbirds_features"
     assert _experiment_name("waterbirds_features_causal_dfr") != "waterbirds_features_causal"
+
+
+def test_report_ad_hoc_filter_can_preserve_script_scope() -> None:
+    assert is_ad_hoc_config("waterbirds_features_dfr_seed101") is True
+    assert is_ad_hoc_config("sweep_waterbirds_dfr") is True
+    assert is_ad_hoc_config("waterbirds_tune_dfr") is True
+    assert is_ad_hoc_config("sweep_waterbirds_dfr", include_sweep_prefix=False) is False
+    assert is_ad_hoc_config("waterbirds_tune_dfr", include_waterbirds_tune=False) is False
+
+
+def test_write_csv_rows_rejects_empty_output(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="No rows to write"):
+        write_csv_rows(tmp_path / "empty.csv", [])
+
+
+def test_write_csv_rows_writes_header_and_rows(tmp_path: Path) -> None:
+    out = tmp_path / "rows.csv"
+    write_csv_rows(out, [{"name": "a", "value": "1"}])
+    assert out.read_text(encoding="utf-8").splitlines() == ["name,value", "a,1"]
 
 
 def test_alignment_rows_mark_dfr_validation_usage(tmp_path: Path) -> None:

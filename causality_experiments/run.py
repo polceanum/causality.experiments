@@ -33,6 +33,9 @@ def run_experiment(config_path: str | Path, output_root: str | Path | None = Non
         },
         "metrics": metrics,
     }
+    model_details = getattr(model, "details", None)
+    if model_details is not None:
+        payload["model_details"] = model_details
     (run_dir / "metrics.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
     with (run_dir / "metrics.csv").open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)

@@ -7,7 +7,11 @@ import sys
 import yaml
 
 from causality_experiments.config import load_config
-from scripts import run_waterbirds_official_backbone_sweep, run_waterbirds_official_representation_sweep
+from scripts import (
+    run_waterbirds_official_backbone_sweep,
+    run_waterbirds_official_causal_dfr_sweep,
+    run_waterbirds_official_representation_sweep,
+)
 from scripts.prepare_waterbirds_features import PreparedWaterbirdsFeatures
 
 
@@ -95,6 +99,82 @@ def test_run_waterbirds_official_representation_sweep_smoke(tmp_path: Path, monk
     summary = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
     assert summary["baseline_label"] == "baseline"
     assert {candidate["label"] for candidate in summary["candidates"]} == {"baseline", "candidate"}
+
+
+def test_run_waterbirds_official_causal_dfr_sweep_reports_paired_deltas(tmp_path: Path, monkeypatch) -> None:
+    baseline = tmp_path / "baseline.yaml"
+    candidate = tmp_path / "candidate.yaml"
+    _write_config(baseline, name="waterbirds_features_official_dfr_val_tr", method_kind="official_dfr_val_tr")
+    _write_config(candidate, name="waterbirds_features_official_causal_dfr", method_kind="causal_dfr")
+    features_csv = tmp_path / "features.csv"
+    features_csv.write_text("split,y,place,group,feature_0\ntrain,0,0,0,0.0\nval,0,0,0,0.0\ntest,0,0,0,0.0\n", encoding="utf-8")
+
+    def fake_load_dataset(config: dict[str, object]) -> dict[str, object]:
+        return config
+
+    def fake_fit_method(bundle: dict[str, object], config: dict[str, object]) -> dict[str, object]:
+        return config
+
+    def fake_evaluate(model: dict[str, object], bundle: dict[str, object], config: dict[str, object]) -> dict[str, float]:
+        seed = int(config["seed"])
+        method = dict(config["method"])
+        if method["kind"] == "official_dfr_val_tr":
+            test_wga = 0.90 + seed * 0.0001
+        else:
+            nuisance_weight = float(method["causal_dfr_nuisance_weight"])
+            test_wga = 0.905 + seed * 0.0001 + nuisance_weight * 0.001
+        return {
+            "val/accuracy": 0.95,
+            "val/worst_group_accuracy": 0.85,
+            "test/accuracy": 0.96,
+            "test/worst_group_accuracy": test_wga,
+            "feature_importance/nuisance_to_causal": 0.3,
+            "probe/selectivity": 0.2,
+        }
+
+    monkeypatch.setattr(run_waterbirds_official_causal_dfr_sweep, "load_dataset", fake_load_dataset)
+    monkeypatch.setattr(run_waterbirds_official_causal_dfr_sweep, "fit_method", fake_fit_method)
+    monkeypatch.setattr(run_waterbirds_official_causal_dfr_sweep, "evaluate", fake_evaluate)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_waterbirds_official_causal_dfr_sweep.py",
+            "--baseline-config",
+            str(baseline),
+            "--candidate-config",
+            str(candidate),
+            "--dataset-path",
+            str(features_csv),
+            "--seeds",
+            "101",
+            "102",
+            "--causal-mask-top-ks",
+            "128",
+            "--causal-mask-min-margins",
+            "0.01",
+            "--nuisance-weights",
+            "2.0",
+            "3.0",
+            "--nuisance-priors",
+            "mask",
+            "--max-candidates",
+            "1",
+            "--output-csv",
+            str(tmp_path / "paired.csv"),
+            "--output-json",
+            str(tmp_path / "paired.json"),
+        ],
+    )
+
+    run_waterbirds_official_causal_dfr_sweep.main()
+
+    rows = (tmp_path / "paired.csv").read_text(encoding="utf-8").splitlines()
+    summary = json.loads((tmp_path / "paired.json").read_text(encoding="utf-8"))
+    assert len(rows) == 5
+    assert summary["candidates"][0]["count"] == 2
+    assert summary["candidates"][0]["mean_delta_to_baseline"] > 0.006
+    assert summary["candidates"][0]["passes_promotion_gate"] is False
 
 
 def test_run_waterbirds_official_backbone_sweep_smoke(tmp_path: Path, monkeypatch) -> None:
@@ -447,3 +527,105 @@ def test_run_waterbirds_official_backbone_sweep_tags_group_balanced_features(tmp
     assert seen["erm_finetune_balance_groups"] is True
     assert str(seen["features_csv"]).endswith("features_official_e1_lr0.001_envadv0_gb_limit48_seed101.csv")
     assert summary["candidates"][0]["tag"] == "official_e1_lr0.001_envadv0_gb_limit48"
+
+
+def test_run_waterbirds_official_backbone_sweep_tags_alternate_representation_source(tmp_path: Path, monkeypatch) -> None:
+    dfr_config = tmp_path / "official_dfr.yaml"
+    _write_config(dfr_config, name="waterbirds_features_official_dfr_val_tr", method_kind="official_dfr_val_tr")
+    seen: dict[str, object] = {}
+
+    def fake_prepare(**kwargs: object) -> PreparedWaterbirdsFeatures:
+        seen.update(kwargs)
+        features_csv = Path(kwargs["features_csv"])
+        features_csv.write_text("split,y,place,group,feature_0\ntrain,0,0,0,0.0\n", encoding="utf-8")
+        return PreparedWaterbirdsFeatures(
+            features_csv=features_csv,
+            manifest_path=features_csv.with_suffix(".json"),
+            feature_extractor="alternate_source_smoke",
+            feature_source="smoke",
+            split_definition="official split",
+            base_metrics={},
+            resolved_settings={
+                "batch_size": 32,
+                "erm_finetune_epochs": 0,
+                "erm_finetune_lr": 0.001,
+                "erm_finetune_weight_decay": 1e-3,
+                "erm_finetune_mode": "all",
+                "erm_finetune_optimizer": "sgd",
+                "erm_finetune_momentum": 0.9,
+                "erm_finetune_augment": True,
+                "erm_finetune_balance_groups": False,
+                "erm_env_adv_weight": 0.0,
+                "erm_env_adv_hidden_dim": 0,
+                "erm_env_adv_loss_weight": 1.0,
+                "erm_finetune_warmup_epochs": 0,
+                "erm_finetune_warmup_mode": "head",
+                "weights_variant": "imagenet1k_v2",
+                "eval_transform_style": "weights",
+                "feature_extractor_suffix": "waterbirds_official_backbone_e0_lr0.001_envadv0_bconvnextptiny_wimagenet1kpv2_evalweights_limit48_seed101_penultimate",
+                "erm_finetune_preset": "",
+                "backbone_name": "convnext_tiny",
+            },
+        )
+
+    def fake_run_experiment(config_path_arg: str | Path, output_root: str | Path | None = None) -> Path:
+        config = load_config(config_path_arg)
+        run_dir = Path(output_root or config["output_dir"]) / f"{config['name']}-fake"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "config": config,
+            "metrics": {
+                "val/accuracy": 0.95,
+                "val/worst_group_accuracy": 0.85,
+                "test/accuracy": 0.96,
+                "test/worst_group_accuracy": 0.87,
+            },
+        }
+        (run_dir / "metrics.json").write_text(json.dumps(payload), encoding="utf-8")
+        return run_dir
+
+    monkeypatch.setattr(run_waterbirds_official_backbone_sweep, "prepare_waterbirds_features_artifact", fake_prepare)
+    monkeypatch.setattr(run_waterbirds_official_backbone_sweep, "run_experiment", fake_run_experiment)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_waterbirds_official_backbone_sweep.py",
+            "--official-dfr-config",
+            str(dfr_config),
+            "--seeds",
+            "101",
+            "--epochs",
+            "0",
+            "--lrs",
+            "0.001",
+            "--env-adv-weights",
+            "0.0",
+            "--backbones",
+            "convnext_tiny",
+            "--weights-variants",
+            "imagenet1k_v2",
+            "--eval-transform-styles",
+            "weights",
+            "--limit",
+            "48",
+            "--output-root",
+            str(tmp_path / "runs"),
+            "--output-csv",
+            str(tmp_path / "alternate_rows.csv"),
+            "--output-json",
+            str(tmp_path / "alternate_summary.json"),
+        ],
+    )
+
+    run_waterbirds_official_backbone_sweep.main()
+
+    summary = json.loads((tmp_path / "alternate_summary.json").read_text(encoding="utf-8"))
+    assert seen["weights_variant"] == "imagenet1k_v2"
+    assert seen["backbone_name"] == "convnext_tiny"
+    assert seen["eval_transform_style"] == "weights"
+    assert str(seen["features_csv"]).endswith(
+        "features_official_e0_lr0.001_envadv0_bconvnextptiny_wimagenet1kpv2_evalweights_limit48_seed101.csv"
+    )
+    assert summary["blocked_rows"] == []
+    assert summary["candidates"][0]["tag"] == "official_e0_lr0.001_envadv0_bconvnextptiny_wimagenet1kpv2_evalweights_limit48"

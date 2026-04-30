@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from causality_experiments.reporting import latest_by_config, safe_float as _safe_float, write_csv_rows
 from causality_experiments.run import summarize_runs
 
 
@@ -43,15 +44,6 @@ PAIR_SPECS = [
 ]
 
 
-def _safe_float(value: str | None) -> float | None:
-    if value in {None, ""}:
-        return None
-    try:
-        return float(value)
-    except ValueError:
-        return None
-
-
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--runs", default="outputs/runs")
@@ -63,13 +55,7 @@ def main() -> None:
 
     summary = summarize_runs(args.runs)
     rows = list(csv.DictReader(summary.open()))
-    latest_by_config: dict[str, dict[str, str]] = {}
-    for row in rows:
-        config = row.get("config", "")
-        if not config:
-            continue
-        if config not in latest_by_config or row.get("run", "") > latest_by_config[config].get("run", ""):
-            latest_by_config[config] = row
+    latest = latest_by_config(rows)
 
     compact_csv_rows: dict[tuple[str, str], dict[str, str]] = {}
     for spec in PAIR_SPECS:
@@ -85,10 +71,10 @@ def main() -> None:
 
     output_rows: list[dict[str, str]] = []
     for spec in PAIR_SPECS:
-        compact = latest_by_config.get(spec["compact_config"], {})
+        compact = latest.get(spec["compact_config"], {})
         compact_csv_key = str(spec.get("compact_csv_config", spec["compact_config"]))
         compact_csv_row = compact_csv_rows.get((str(spec["label"]), compact_csv_key), {})
-        full = latest_by_config.get(spec["full_config"], {})
+        full = latest.get(spec["full_config"], {})
         compact_wga = _safe_float(compact.get("test/worst_group_accuracy"))
         compact_val_wga = _safe_float(compact.get("val/worst_group_accuracy"))
         compact_run = compact.get("run", "")
@@ -111,11 +97,7 @@ def main() -> None:
         )
 
     out_path = Path(args.out)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with out_path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(output_rows[0].keys()))
-        writer.writeheader()
-        writer.writerows(output_rows)
+    write_csv_rows(out_path, output_rows)
     print(out_path)
     for row in output_rows:
         print(row)

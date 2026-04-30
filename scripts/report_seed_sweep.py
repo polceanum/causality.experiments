@@ -11,43 +11,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from causality_experiments.reporting import REPORT_METHODS, experiment_name as _experiment_name
 from causality_experiments.run import summarize_runs
-
-
-METHODS = {
-    "erm",
-    "group_balanced_erm",
-    "group_dro",
-    "irm",
-    "jtt",
-    "dfr",
-    "causal_dfr",
-    "representation_dfr",
-    "adversarial_probe",
-    "counterfactual_adversarial",
-    "counterfactual_augmentation",
-}
-
-
-def _experiment_name(config_name: str) -> str:
-    for suffix in (
-        "_counterfactual_augmentation",
-        "_counterfactual_adversarial",
-        "_counterfactual_causal_dfr",
-        "_representation_dfr",
-        "_causal_dfr",
-        "_adversarial_probe",
-        "_group_balanced_erm",
-        "_group_dro",
-        "_loss_weighted_dfr",
-        "_dfr",
-        "_irm",
-        "_jtt",
-        "_erm",
-    ):
-        if suffix in config_name:
-            return config_name.split(suffix, 1)[0]
-    return config_name
 
 
 def _mean_std(values: list[float]) -> tuple[float, float]:
@@ -76,7 +41,7 @@ def main() -> None:
     for row in latest.values():
         method = row.get("method", "")
         config_name = row.get("config") or row.get("run", "")
-        if method not in METHODS or "_seed" not in config_name:
+        if method not in REPORT_METHODS or "_seed" not in config_name:
             continue
         experiment = _experiment_name(config_name)
         if args.match and args.match not in experiment:

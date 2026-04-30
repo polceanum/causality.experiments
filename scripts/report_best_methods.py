@@ -8,30 +8,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from causality_experiments.reporting import (
+    REPORT_METHODS,
+    experiment_name as _experiment_name,
+    is_ad_hoc_config as _is_ad_hoc_config,
+)
 from causality_experiments.run import summarize_runs
-
-
-def _experiment_name(run: str) -> str:
-    base = run
-    for suffix in (
-        "_counterfactual_augmentation",
-        "_counterfactual_adversarial",
-        "_official_dfr_val_tr",
-        "_counterfactual_causal_dfr",
-        "_representation_dfr",
-        "_causal_dfr",
-        "_adversarial_probe",
-        "_group_balanced_erm",
-        "_group_dro",
-        "_loss_weighted_dfr",
-        "_dfr",
-        "_irm",
-        "_jtt",
-        "_erm",
-    ):
-        if base.endswith(suffix):
-            return base[: -len(suffix)]
-    return base
 
 
 def main() -> None:
@@ -45,28 +27,10 @@ def main() -> None:
             latest[key] = row
     grouped: dict[str, list[dict[str, str]]] = {}
     for row in latest.values():
-        if row.get("method") not in {
-            "erm",
-            "group_balanced_erm",
-            "group_dro",
-            "irm",
-            "jtt",
-            "dfr",
-            "official_dfr_val_tr",
-            "causal_dfr",
-            "representation_dfr",
-            "adversarial_probe",
-            "counterfactual_adversarial",
-            "counterfactual_augmentation",
-        }:
+        if row.get("method") not in REPORT_METHODS:
             continue
         config_name = row.get("config") or row["run"]
-        if (
-            "_irm_w" in config_name
-            or "_seed" in config_name
-            or "_w0p" in config_name
-            or "_w1p" in config_name
-        ):
+        if _is_ad_hoc_config(config_name, include_sweep_prefix=False, include_waterbirds_tune=False):
             continue
         grouped.setdefault(_experiment_name(config_name), []).append(row)
     for experiment, items in sorted(grouped.items()):

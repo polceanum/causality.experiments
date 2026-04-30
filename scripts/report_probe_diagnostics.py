@@ -9,14 +9,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from causality_experiments.reporting import method_family as _method_family
 from causality_experiments.run import summarize_runs
-
-
-PROPOSED_METHODS = {
-    "causal_dfr",
-    "counterfactual_adversarial",
-    "counterfactual_augmentation",
-}
 
 
 def _parse_float(value: str) -> float | None:
@@ -24,10 +18,6 @@ def _parse_float(value: str) -> float | None:
         return float(value)
     except ValueError:
         return None
-
-
-def _method_family(method: str) -> str:
-    return "proposed" if method in PROPOSED_METHODS else "baseline"
 
 
 def build_probe_rows(runs_dir: str | Path, match: str = "") -> list[dict[str, str]]:

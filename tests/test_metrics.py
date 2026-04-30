@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from causality_experiments.data import load_dataset
-from causality_experiments.methods import FeatureGate, _apply_causal_input_gate, _balanced_group_example_weights, _balanced_group_subsample_indices, _counterfactual_disagreement_weights, _estimate_counterfactual_instability, _instability_sample_weights, _select_replay_indices, _soft_nuisance_mask_from_scores, _update_instability_ema, fit_method
+from causality_experiments.methods import FeatureGate, _apply_causal_input_gate, _balanced_group_example_weights, _balanced_group_subsample_indices, _counterfactual_disagreement_weights, _estimate_counterfactual_instability, _fit_official_dfr_on_bundle, _instability_sample_weights, _select_replay_indices, _soft_nuisance_mask_from_scores, _update_instability_ema, fit_method
 from causality_experiments.metrics import evaluate
 from causality_experiments.sklearn_compat import LogisticRegression, StandardScaler
 
@@ -649,6 +649,84 @@ def test_official_dfr_val_tr_matches_direct_sklearn_retraining(tmp_path: Path) -
     direct_pred = logreg.predict(scaler.transform(test_x))
     model_pred = model.predict(bundle.split("test")["x"]).argmax(dim=1).numpy()
     assert direct_pred.tolist() == model_pred.tolist()
+
+
+def test_official_causal_shrink_identity_matches_official_dfr(tmp_path: Path) -> None:
+    csv_path = tmp_path / "features.csv"
+    rows = [
+        "split,y,place,group,feature_0,feature_1",
+        "train,0,0,0,-1.0,-1.0",
+        "train,1,1,3,1.0,1.0",
+        "val,0,0,0,-3.0,-2.0",
+        "val,0,0,0,-2.8,-1.8",
+        "val,1,0,1,2.8,1.8",
+        "val,1,0,1,3.0,2.0",
+        "val,0,1,2,-3.2,-2.2",
+        "val,0,1,2,-3.1,-2.1",
+        "val,1,1,3,3.1,2.1",
+        "val,1,1,3,3.2,2.2",
+        "test,0,0,0,-3.0,-2.0",
+        "test,1,1,3,3.0,2.0",
+    ]
+    csv_path.write_text("\n".join(rows), encoding="utf-8")
+    base_config = {
+        "seed": 5,
+        "dataset": {"kind": "waterbirds_features", "path": str(csv_path), "causal_feature_columns": ["feature_0"]},
+        "method": {
+            "kind": "official_dfr_val_tr",
+            "official_dfr_c_grid": [0.3],
+            "official_dfr_num_retrains": 1,
+            "official_dfr_balance_val": True,
+            "official_dfr_add_train": False,
+        },
+    }
+    shrink_config = {**base_config, "method": {**base_config["method"], "kind": "official_causal_shrink_dfr_val_tr", "official_causal_shrink_grid": [1.0]}}
+    bundle = load_dataset(base_config)
+    official = fit_method(bundle, base_config)
+    shrink = fit_method(bundle, shrink_config)
+    np.testing.assert_allclose(shrink.weight.numpy(), official.weight.numpy(), atol=1e-7)
+    np.testing.assert_allclose(shrink.bias.numpy(), official.bias.numpy(), atol=1e-7)
+    assert shrink.details["official_dfr_best_feature_scale"] == 1.0
+
+
+def test_official_causal_shrink_can_change_nuisance_coefficients(tmp_path: Path) -> None:
+    csv_path = tmp_path / "features.csv"
+    rows = [
+        "split,y,place,group,feature_0,feature_1",
+        "train,0,0,0,-1.0,-1.0",
+        "train,1,1,3,1.0,1.0",
+        "val,0,0,0,-0.2,-3.5",
+        "val,0,0,0,0.2,-1.4",
+        "val,1,0,1,0.1,1.6",
+        "val,1,0,1,-0.1,3.4",
+        "val,0,1,2,-0.1,-4.0",
+        "val,0,1,2,0.1,-2.1",
+        "val,1,1,3,0.2,2.4",
+        "val,1,1,3,-0.2,4.1",
+        "test,0,0,0,-0.1,-2.5",
+        "test,1,1,3,0.1,2.5",
+    ]
+    csv_path.write_text("\n".join(rows), encoding="utf-8")
+    config = {
+        "seed": 5,
+        "dataset": {"kind": "waterbirds_features", "path": str(csv_path), "causal_feature_columns": ["feature_0"]},
+        "method": {
+            "kind": "official_dfr_val_tr",
+            "official_dfr_c_grid": [10.0],
+            "official_dfr_num_retrains": 1,
+            "official_dfr_balance_val": True,
+            "official_dfr_add_train": False,
+        },
+    }
+    bundle = load_dataset(config)
+    official = fit_method(bundle, config)
+    shrunk = _fit_official_dfr_on_bundle(
+        bundle,
+        config,
+        feature_scale_grid=[(0.25, np.array([1.0, 0.25], dtype=np.float64))],
+    )
+    assert not np.allclose(shrunk.weight.numpy(), official.weight.numpy(), atol=1e-7)
+    assert abs(float(shrunk.weight.numpy()[0, 1])) < abs(float(official.weight.numpy()[0, 1]))
 
 
 def test_dfr_rejects_unknown_group_weight_mode() -> None:

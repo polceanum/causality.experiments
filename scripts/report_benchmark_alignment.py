@@ -17,49 +17,17 @@ from causality_experiments.literature import (
     literature_rows,
     literature_wga,
 )
-from causality_experiments.run import summarize_runs
-
-
-METHOD_SUFFIXES = (
-    "_counterfactual_augmentation",
-    "_counterfactual_adversarial",
-    "_official_dfr_val_tr",
-    "_counterfactual_causal_dfr",
-    "_representation_dfr",
-    "_causal_dfr",
-    "_adversarial_probe",
-    "_group_balanced_erm",
-    "_group_dro",
-    "_loss_weighted_dfr",
-    "_dfr",
-    "_irm",
-    "_jtt",
-    "_erm",
+from causality_experiments.reporting import (
+    experiment_name as _experiment_name,
+    format_delta as _format_delta,
+    format_reference_metric as _format_literature_metric,
+    format_metric_value as _format_metric,
+    is_ad_hoc_config as _is_ad_hoc_config,
+    method_family as _method_family,
+    safe_float as _safe_float,
+    validation_usage as _validation_usage,
 )
-
-PROPOSED_METHODS = {
-    "causal_dfr",
-    "representation_dfr",
-    "counterfactual_adversarial",
-    "counterfactual_augmentation",
-}
-
-
-def _experiment_name(name: str) -> str:
-    for suffix in METHOD_SUFFIXES:
-        if name.endswith(suffix):
-            return name[: -len(suffix)]
-    return name
-
-
-def _method_family(method: str) -> str:
-    return "proposed" if method in PROPOSED_METHODS else "baseline"
-
-
-def _validation_usage(method: str) -> str:
-    if method in {"dfr", "official_dfr_val_tr", "causal_dfr", "representation_dfr"}:
-        return "trains_on_validation_groups"
-    return "holdout_validation_metrics"
+from causality_experiments.run import summarize_runs
 
 
 def _config_metadata() -> dict[str, dict[str, str]]:
@@ -81,37 +49,6 @@ def _config_metadata() -> dict[str, dict[str, str]]:
             "benchmark_split_definition": str(benchmark.get("provenance", {}).get("split_definition", "")),
         }
     return metadata
-
-
-def _is_ad_hoc_config(name: str) -> bool:
-    return "_seed" in name or "_irm_w" in name or name.startswith("waterbirds_tune_")
-
-
-def _safe_float(value: str | None) -> float | None:
-    if value in {None, ""}:
-        return None
-    try:
-        return float(value)
-    except ValueError:
-        return None
-
-
-def _format_metric(value: float | None) -> str:
-    if value is None:
-        return ""
-    return f"{value:.3f}"
-
-
-def _format_literature_metric(value: float | None) -> str:
-    if value is None:
-        return ""
-    return f"{value / 100.0:.3f}"
-
-
-def _format_delta(ours: float | None, reference_percent: float | None) -> str:
-    if ours is None or reference_percent is None:
-        return ""
-    return f"{ours - (reference_percent / 100.0):.3f}"
 
 
 def _comparison_status(
@@ -141,13 +78,7 @@ def build_alignment_rows(
     latest: dict[tuple[str, str], dict[str, str]] = {}
     for row in rows:
         config = row.get("config", "")
-        if (
-            not config
-            or "_seed" in config
-            or "_irm_w" in config
-            or "_w0p" in config
-            or "_w1p" in config
-        ):
+        if not config or _is_ad_hoc_config(config, include_sweep_prefix=False, include_waterbirds_tune=False):
             continue
         base_config = _experiment_name(config)
         if not row.get("benchmark_id") and base_config in config_metadata:

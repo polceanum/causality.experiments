@@ -211,6 +211,56 @@ def test_protocol_feature_matrix_uses_official_train_transform_for_official_styl
     assert seen_train_kwargs["checkpoint_path"] == tmp_path / "train.pt"
 
 
+def test_protocol_feature_matrix_can_use_frozen_huggingface_backbone(monkeypatch, tmp_path: Path) -> None:
+    seen: dict[str, object] = {}
+
+    class TinyHFBackbone(torch.nn.Module):
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            return torch.ones((x.shape[0], 3), dtype=torch.float32)
+
+    def fake_build_frozen_hf_vision_backbone(*, model_id: str, local_files_only: bool = False):
+        seen["model_id"] = model_id
+        seen["local_files_only"] = local_files_only
+        return TinyHFBackbone(), (lambda image: torch.zeros(3, 2, 2)), "hf_fake_vision"
+
+    monkeypatch.setattr(prepare_waterbirds_features, "build_frozen_hf_vision_backbone", fake_build_frozen_hf_vision_backbone)
+    metadata = pd.DataFrame(
+        {
+            "split": ["train"],
+            "y": [0],
+            "place": [0],
+            "group": [0],
+            "img_filename": ["a.jpg"],
+            "place_filename": ["p.jpg"],
+        }
+    )
+    Image.new("RGB", (4, 4), color=(128, 128, 128)).save(tmp_path / "a.jpg")
+
+    features, extractor_name, base_metrics, resolved_settings = prepare_waterbirds_features.extract_protocol_feature_matrix(
+        tmp_path,
+        metadata,
+        device=torch.device("cpu"),
+        batch_size=1,
+        erm_finetune_epochs=0,
+        erm_finetune_lr=0.001,
+        erm_finetune_weight_decay=0.001,
+        erm_finetune_mode="all",
+        erm_finetune_optimizer="sgd",
+        erm_finetune_momentum=0.9,
+        erm_finetune_augment=True,
+        erm_finetune_balance_groups=False,
+        weights_variant="openai/clip-vit-base-patch32",
+        eval_transform_style="local",
+        backbone_name="hf_auto",
+    )
+
+    assert seen == {"model_id": "openai/clip-vit-base-patch32", "local_files_only": True}
+    assert features.shape == (1, 3)
+    assert extractor_name == "hf_fake_vision_penultimate"
+    assert base_metrics == {}
+    assert resolved_settings["backbone_name"] == "hf_auto"
+
+
 def test_evaluate_waterbirds_model_records_group_and_prediction_counts(tmp_path: Path) -> None:
     for filename in ("train0.jpg", "train1.jpg", "val0.jpg", "val1.jpg", "test0.jpg", "test1.jpg"):
         Image.new("RGB", (8, 8), color=(128, 128, 128)).save(tmp_path / filename)

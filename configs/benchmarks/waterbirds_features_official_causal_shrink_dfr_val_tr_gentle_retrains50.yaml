@@ -1,0 +1,46 @@
+name: waterbirds_features_official_causal_shrink_dfr_val_tr_gentle_retrains50
+benchmark:
+  kind: real
+  id: waterbirds
+  comparable_to_literature: true
+  requirements:
+  - Real Waterbirds split semantics.
+  - Metrics report test worst-group accuracy.
+  - Feature extractor/backbone assumptions are documented alongside results.
+  provenance:
+    feature_extractor: torchvision_resnet50_imagenet1k_v1_waterbirds_official_erm_sgd_aug_e100_penultimate
+    feature_source: official Stanford Waterbirds tarball https://nlp.stanford.edu/data/dro/waterbird_complete95_forest2water2.tar.gz featurized locally by scripts/prepare_waterbirds_features.py
+    split_definition: 'official Stanford Waterbirds metadata split: 0=train, 1=val, 2=test'
+seed: 101
+dataset:
+  kind: waterbirds_features
+  path: data/waterbirds/features_official_erm.csv
+  causal_mask_strategy: label_minus_env_correlation
+  causal_mask_min_margin: 0.01
+  causal_mask_top_k: 512
+method:
+  kind: official_causal_shrink_dfr_val_tr
+  official_dfr_c_grid:
+  - 1.0
+  - 0.7
+  - 0.3
+  - 0.1
+  - 0.07
+  - 0.03
+  - 0.01
+  official_dfr_num_retrains: 50
+  official_dfr_balance_val: true
+  official_dfr_add_train: false
+  official_causal_shrink_prior: mask
+  official_causal_shrink_grid:
+  - 1.0
+  - 0.95
+  - 0.9
+  - 0.85
+  - 0.75
+training:
+  device: auto
+metrics:
+- accuracy
+- worst_group_accuracy
+output_dir: outputs/runs

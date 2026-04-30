@@ -12,58 +12,17 @@ if str(ROOT) not in sys.path:
 
 from causality_experiments.run import summarize_runs
 from causality_experiments.literature import best_literature_wga, literature_rows, literature_wga
-
-
-METHODS = {
-    "erm",
-    "group_balanced_erm",
-    "group_dro",
-    "irm",
-    "jtt",
-    "dfr",
-    "official_dfr_val_tr",
-    "causal_dfr",
-    "representation_dfr",
-    "adversarial_probe",
-    "counterfactual_adversarial",
-    "counterfactual_augmentation",
-}
-
-PROPOSED_METHODS = {
-    "causal_dfr",
-    "representation_dfr",
-    "counterfactual_adversarial",
-    "counterfactual_augmentation",
-}
-
-
-def _experiment_name(config_name: str) -> str:
-    for suffix in (
-        "_counterfactual_augmentation",
-        "_counterfactual_adversarial",
-        "_official_dfr_val_tr",
-        "_counterfactual_causal_dfr",
-        "_representation_dfr",
-        "_causal_dfr",
-        "_adversarial_probe",
-        "_group_balanced_erm",
-        "_group_dro",
-        "_loss_weighted_dfr",
-        "_dfr",
-        "_irm",
-        "_jtt",
-        "_erm",
-    ):
-        if config_name.endswith(suffix):
-            return config_name[: -len(suffix)]
-    return config_name
-
-
-def _metric(row: dict[str, str], key: str) -> float:
-    try:
-        return float(row.get(key, "nan"))
-    except ValueError:
-        return float("nan")
+from causality_experiments.reporting import (
+    REPORT_METHODS,
+    delta_to_reference as _delta_to_reference,
+    experiment_name as _experiment_name,
+    format_reference_metric as _format_reference_metric,
+    format_row_metric as _format_metric,
+    is_ad_hoc_config as _is_ad_hoc_config,
+    latest_by_config as _latest_by_config,
+    method_family as _method_family,
+    metric_value as _metric,
+)
 
 
 def _is_literature_comparable(row: dict[str, str]) -> bool:
@@ -72,52 +31,6 @@ def _is_literature_comparable(row: dict[str, str]) -> bool:
 
 def _has_complete_provenance(row: dict[str, str]) -> bool:
     return row.get("benchmark_provenance_complete", "").lower() == "true"
-
-
-def _is_ad_hoc_config(config_name: str) -> bool:
-    return (
-        "_seed" in config_name
-        or "_irm_w" in config_name
-        or "_w0p" in config_name
-        or "_w1p" in config_name
-        or config_name.startswith("sweep_")
-        or config_name.startswith("waterbirds_tune_")
-    )
-
-
-def _method_family(method: str) -> str:
-    return "proposed" if method in PROPOSED_METHODS else "baseline"
-
-
-def _format_reference_metric(value: float | None) -> str:
-    if value is None:
-        return ""
-    return f"{value / 100.0:.3f}"
-
-
-def _delta_to_reference(row: dict[str, str], key: str, reference_percent: float | None) -> str:
-    ours = _metric(row, key)
-    if ours != ours or reference_percent is None:
-        return ""
-    return f"{ours - (reference_percent / 100.0):.3f}"
-
-
-def _format_metric(row: dict[str, str], key: str) -> str:
-    value = _metric(row, key)
-    if value != value:
-        return ""
-    return f"{value:.3f}"
-
-
-def _latest_by_config(rows: list[dict[str, str]]) -> dict[str, dict[str, str]]:
-    latest: dict[str, dict[str, str]] = {}
-    for row in rows:
-        config_name = row.get("config", "")
-        if not config_name:
-            continue
-        if config_name not in latest or row.get("run", "") > latest[config_name].get("run", ""):
-            latest[config_name] = row
-    return latest
 
 
 def _dataset_path_exists(experiment: str) -> bool | None:
@@ -177,7 +90,7 @@ def main() -> None:
     for row in latest.values():
         method = row.get("method", "")
         config_name = row.get("config") or row.get("run", "")
-        if method not in METHODS or _is_ad_hoc_config(config_name):
+        if method not in REPORT_METHODS or _is_ad_hoc_config(config_name):
             continue
         experiment = _experiment_name(config_name)
         if args.match and args.match not in experiment:
