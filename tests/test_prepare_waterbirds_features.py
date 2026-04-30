@@ -7,6 +7,8 @@ import yaml
 
 from scripts.prepare_waterbirds_features import (
     _balanced_group_sample_weights,
+    _canonical_erm_sample_mode,
+    _erm_finetune_sample_weights,
     _load_prepared_artifact,
     _store_prepared_artifact,
     _set_trainable_layers,
@@ -106,6 +108,28 @@ def test_balanced_group_sample_weights_equalize_group_mass() -> None:
     assert float(weights.mean()) == 1.0
 
 
+def test_conflict_sample_weights_upweight_minority_waterbirds_groups() -> None:
+    metadata = pd.DataFrame(
+        {
+            "y": [0, 0, 1, 1],
+            "place": [0, 1, 0, 1],
+            "group": [0, 2, 1, 3],
+        }
+    )
+
+    weights = _erm_finetune_sample_weights(
+        metadata,
+        sample_mode="conflict_upweight",
+        minority_weight=4.0,
+    )
+
+    assert weights is not None
+    assert _canonical_erm_sample_mode("minority") == "conflict_upweight"
+    assert weights[1].item() / weights[0].item() == 4.0
+    assert weights[2].item() / weights[3].item() == 4.0
+    assert float(weights.mean()) == 1.0
+
+
 def test_stratified_metadata_limit_keeps_split_group_coverage() -> None:
     rows = []
     for split in ("train", "val", "test"):
@@ -202,6 +226,8 @@ def test_protocol_feature_matrix_uses_official_train_transform_for_official_styl
         erm_finetune_momentum=0.9,
         erm_finetune_augment=True,
         erm_finetune_balance_groups=False,
+        erm_finetune_sample_mode="conflict_upweight",
+        erm_finetune_minority_weight=3.0,
         eval_transform_style="official",
         erm_finetune_preset=None,
         training_checkpoint_path=tmp_path / "train.pt",
@@ -209,6 +235,8 @@ def test_protocol_feature_matrix_uses_official_train_transform_for_official_styl
 
     assert calls == [True]
     assert seen_train_kwargs["checkpoint_path"] == tmp_path / "train.pt"
+    assert seen_train_kwargs["sample_mode"] == "conflict_upweight"
+    assert seen_train_kwargs["minority_weight"] == 3.0
 
 
 def test_protocol_feature_matrix_can_use_frozen_huggingface_backbone(monkeypatch, tmp_path: Path) -> None:

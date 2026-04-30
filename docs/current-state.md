@@ -466,10 +466,17 @@ goal, not incidental development mechanics.
   moves the fused clue prior into the official DFR feature-scaling hook. The
   first paired fused top-64 pruned screen averaged about `0.9311` test WGA
   versus the official DFR baseline at about `0.9315`; seeds 101 and 103 won
-  slightly, seed 102 lost, and the promotion gate failed. This is a much closer
-  non-promotion than the validation-split causal DFR path, so the next iteration
-  should tune the official-compatible clue scaling/support rather than abandon
-  that route.
+  slightly, seed 102 lost, and the promotion gate failed. This is a useful
+  integration diagnostic, but the delta is now clearly too small to be the main
+  route toward a meaningful `1`-`2` point improvement.
+- The next implementation track is upstream representation/data intervention
+  before official DFR. `scripts/prepare_waterbirds_features.py` now supports
+  named ERM fine-tune sample modes, including `conflict_upweight` and
+  `group_balanced_conflict_upweight`, and
+  `scripts/run_waterbirds_official_backbone_sweep.py` can tag/cache/audit those
+  feature artifacts through `--sample-modes` and `--minority-weight`. Use this
+  to test background-conflict/minority upweighting at the backbone feature
+  stage, then evaluate with the unchanged official DFR head.
 
 1. Get a real Waterbirds-compatible feature run.
    - Use local features, real splits, labels, and group/background metadata.
@@ -502,6 +509,10 @@ goal, not incidental development mechanics.
      full-backbone SGD-augmentation LR `0.001`/`0.0001`, or group-balanced
      full-backbone SGD-augmentation LR `0.0001` feature tables as improvements;
      they were diagnostic but remained below the fixed-feature tuned anchor.
+   - For future whole-point improvements, prioritize feature generation and
+     training distribution changes before DFR. The first live implementation is
+     conflict/minority sampling during backbone ERM fine-tuning; screen it with
+     small limits before any no-limit full feature extraction.
 3. Compose the strongest local mechanisms.
    - Future mechanism changes should be screened first against the matched
      fixed/grouped random-mask controls, not just against earlier discovery

@@ -532,6 +532,111 @@ def test_run_waterbirds_official_backbone_sweep_tags_group_balanced_features(tmp
     assert summary["candidates"][0]["tag"] == "official_e1_lr0.001_envadv0_gb_limit48"
 
 
+def test_run_waterbirds_official_backbone_sweep_tags_conflict_sample_mode(tmp_path: Path, monkeypatch) -> None:
+    dfr_config = tmp_path / "official_dfr.yaml"
+    _write_config(dfr_config, name="waterbirds_features_official_dfr_val_tr", method_kind="official_dfr_val_tr")
+    seen: dict[str, object] = {}
+
+    def fake_prepare(**kwargs: object) -> PreparedWaterbirdsFeatures:
+        seen.update(kwargs)
+        features_csv = Path(kwargs["features_csv"])
+        features_csv.write_text("split,y,place,group,feature_0\ntrain,0,0,0,0.0\n", encoding="utf-8")
+        return PreparedWaterbirdsFeatures(
+            features_csv=features_csv,
+            manifest_path=features_csv.with_suffix(".json"),
+            feature_extractor="official_backbone_conflict_smoke",
+            feature_source="smoke",
+            split_definition="official split",
+            base_metrics={
+                "train/accuracy": 0.93,
+                "train/worst_group_accuracy": 0.83,
+                "val/accuracy": 0.91,
+                "val/worst_group_accuracy": 0.81,
+                "test/accuracy": 0.92,
+                "test/worst_group_accuracy": 0.82,
+            },
+            resolved_settings={
+                "batch_size": 32,
+                "erm_finetune_epochs": 1,
+                "erm_finetune_lr": 0.001,
+                "erm_finetune_weight_decay": 1e-3,
+                "erm_finetune_mode": "all",
+                "erm_finetune_optimizer": "sgd",
+                "erm_finetune_momentum": 0.9,
+                "erm_finetune_augment": True,
+                "erm_finetune_balance_groups": False,
+                "erm_finetune_sample_mode": "conflict_upweight",
+                "erm_finetune_minority_weight": 3.0,
+                "erm_env_adv_weight": 0.0,
+                "erm_env_adv_hidden_dim": 0,
+                "erm_env_adv_loss_weight": 1.0,
+                "erm_finetune_warmup_epochs": 0,
+                "erm_finetune_warmup_mode": "head",
+                "weights_variant": "legacy_pretrained",
+                "eval_transform_style": "official",
+                "feature_extractor_suffix": "waterbirds_official_backbone_e1_lr0.001_envadv0_conflictw3_limit48_seed101_penultimate",
+                "erm_finetune_preset": "",
+            },
+        )
+
+    def fake_run_experiment(config_path_arg: str | Path, output_root: str | Path | None = None) -> Path:
+        config = load_config(config_path_arg)
+        run_dir = Path(output_root or config["output_dir"]) / f"{config['name']}-fake"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "config": config,
+            "metrics": {
+                "val/accuracy": 0.95,
+                "val/worst_group_accuracy": 0.85,
+                "test/accuracy": 0.96,
+                "test/worst_group_accuracy": 0.87,
+            },
+        }
+        (run_dir / "metrics.json").write_text(json.dumps(payload), encoding="utf-8")
+        return run_dir
+
+    monkeypatch.setattr(run_waterbirds_official_backbone_sweep, "prepare_waterbirds_features_artifact", fake_prepare)
+    monkeypatch.setattr(run_waterbirds_official_backbone_sweep, "run_experiment", fake_run_experiment)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_waterbirds_official_backbone_sweep.py",
+            "--official-dfr-config",
+            str(dfr_config),
+            "--seeds",
+            "101",
+            "--epochs",
+            "1",
+            "--lrs",
+            "0.001",
+            "--env-adv-weights",
+            "0.0",
+            "--sample-modes",
+            "conflict_upweight",
+            "--minority-weight",
+            "3.0",
+            "--limit",
+            "48",
+            "--output-root",
+            str(tmp_path / "runs"),
+            "--output-csv",
+            str(tmp_path / "conflict_rows.csv"),
+            "--output-json",
+            str(tmp_path / "conflict_summary.json"),
+        ],
+    )
+
+    run_waterbirds_official_backbone_sweep.main()
+
+    summary = json.loads((tmp_path / "conflict_summary.json").read_text(encoding="utf-8"))
+    assert seen["erm_finetune_sample_mode"] == "conflict_upweight"
+    assert seen["erm_finetune_minority_weight"] == 3.0
+    assert seen["erm_finetune_balance_groups"] is False
+    assert str(seen["features_csv"]).endswith("features_official_e1_lr0.001_envadv0_conflictw3_limit48_seed101.csv")
+    assert summary["candidates"][0]["tag"] == "official_e1_lr0.001_envadv0_conflictw3_limit48"
+
+
 def test_run_waterbirds_official_backbone_sweep_tags_alternate_representation_source(tmp_path: Path, monkeypatch) -> None:
     dfr_config = tmp_path / "official_dfr.yaml"
     _write_config(dfr_config, name="waterbirds_features_official_dfr_val_tr", method_kind="official_dfr_val_tr")

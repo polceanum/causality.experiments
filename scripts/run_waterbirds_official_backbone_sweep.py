@@ -19,7 +19,11 @@ if str(ROOT) not in sys.path:
 
 from causality_experiments.config import load_config
 from causality_experiments.run import run_experiment
-from scripts.prepare_waterbirds_features import _resolve_erm_settings, prepare_waterbirds_features_artifact
+from scripts.prepare_waterbirds_features import (
+    _canonical_erm_sample_mode,
+    _resolve_erm_settings,
+    prepare_waterbirds_features_artifact,
+)
 
 
 def _settings_match_status(expected: dict[str, Any], actual: dict[str, Any]) -> str:
@@ -30,6 +34,11 @@ def _settings_match_status(expected: dict[str, Any], actual: dict[str, Any]) -> 
         actual_value = actual.get(key)
         if key == "backbone_name" and actual_value is None:
             actual_value = "resnet50"
+        if key == "erm_finetune_sample_mode" and actual_value is None:
+            if value == "natural" or (value == "group_balanced" and actual.get("erm_finetune_balance_groups") is True):
+                continue
+        if key == "erm_finetune_minority_weight" and actual_value is None and float(value) == 1.0:
+            continue
         if actual_value != value:
             mismatches.append(key)
     if mismatches:
@@ -69,6 +78,20 @@ def _source_tag(weights_variant: str, eval_transform_style: str) -> str:
 
 def _backbone_tag(backbone_name: str) -> str:
     return "" if backbone_name.strip().lower() == "resnet50" else f"_b{_tag_value(backbone_name)}"
+
+
+def _sample_mode_tag(sample_mode: str, minority_weight: float) -> str:
+    mode = _canonical_erm_sample_mode(sample_mode)
+    if mode == "natural":
+        return ""
+    if mode == "group_balanced":
+        return "_gb"
+    weight_tag = _tag_value(f"{minority_weight:g}")
+    if mode == "conflict_upweight":
+        return f"_conflictw{weight_tag}"
+    if mode == "group_balanced_conflict_upweight":
+        return f"_gbconflictw{weight_tag}"
+    raise ValueError(f"Unknown sample mode {sample_mode!r}.")
 
 
 def _row(
@@ -116,6 +139,8 @@ def main() -> None:
     parser.add_argument("--weights-variants", nargs="*", default=["legacy_pretrained"])
     parser.add_argument("--eval-transform-styles", nargs="*", default=["official"])
     parser.add_argument("--balance-groups", action="store_true")
+    parser.add_argument("--sample-modes", nargs="*", default=[])
+    parser.add_argument("--minority-weight", type=float, default=1.0)
     parser.add_argument("--warmup-epochs", type=int, default=0)
     parser.add_argument("--warmup-mode", choices=("head", "layer4", "all"), default="head")
     parser.add_argument(
@@ -136,8 +161,9 @@ def main() -> None:
     output_json.parent.mkdir(parents=True, exist_ok=True)
     dfr_base = load_config(args.official_dfr_config)
     rows: list[dict[str, Any]] = []
+    sample_modes = args.sample_modes or (["group_balanced"] if args.balance_groups else ["natural"])
 
-    for seed, epochs, lr, env_adv_weight, backbone_name, weights_variant, eval_transform_style in itertools.product(
+    for seed, epochs, lr, env_adv_weight, backbone_name, weights_variant, eval_transform_style, sample_mode_raw in itertools.product(
         args.seeds,
         args.epochs,
         args.lrs,
@@ -145,14 +171,17 @@ def main() -> None:
         args.backbones,
         args.weights_variants,
         args.eval_transform_styles,
+        sample_modes,
     ):
+        sample_mode = _canonical_erm_sample_mode(str(sample_mode_raw), balance_groups=bool(args.balance_groups))
         limit_tag = f"_limit{args.limit}" if args.limit is not None else ""
-        balance_tag = "_gb" if args.balance_groups else ""
+        balance_tag = _sample_mode_tag(sample_mode, float(args.minority_weight))
         source_tag = f"{_backbone_tag(str(backbone_name))}{_source_tag(str(weights_variant), str(eval_transform_style))}"
         tag = f"official_e{epochs}_lr{lr:g}_envadv{env_adv_weight:g}{balance_tag}{source_tag}{limit_tag}_seed{seed}"
         features_csv = Path(args.features_dir) / f"features_{tag}.csv"
         features_csv.parent.mkdir(parents=True, exist_ok=True)
         feature_extractor_suffix = f"waterbirds_official_backbone_e{epochs}_lr{lr:g}_envadv{env_adv_weight:g}{balance_tag}{source_tag}{limit_tag}_seed{seed}_penultimate"
+        balance_groups = sample_mode in {"group_balanced", "group_balanced_conflict_upweight"}
         expected_settings = _resolve_erm_settings(
             batch_size=args.batch_size,
             erm_finetune_epochs=epochs,
@@ -162,7 +191,9 @@ def main() -> None:
             erm_finetune_optimizer="sgd",
             erm_finetune_momentum=0.9,
             erm_finetune_augment=True,
-            erm_finetune_balance_groups=args.balance_groups,
+            erm_finetune_balance_groups=balance_groups,
+            erm_finetune_sample_mode=sample_mode,
+            erm_finetune_minority_weight=float(args.minority_weight),
             erm_env_adv_weight=env_adv_weight,
             erm_env_adv_hidden_dim=128 if env_adv_weight > 0.0 else 0,
             erm_env_adv_loss_weight=1.0,
@@ -198,6 +229,7 @@ def main() -> None:
                     "tag": tag,
                     "reuse_features": bool(args.reuse_features),
                     "features_csv": str(features_csv),
+                    "sample_mode": sample_mode,
                 },
                 sort_keys=True,
             ),
@@ -221,7 +253,9 @@ def main() -> None:
             erm_finetune_optimizer="sgd",
             erm_finetune_momentum=0.9,
             erm_finetune_augment=True,
-            erm_finetune_balance_groups=args.balance_groups,
+            erm_finetune_balance_groups=balance_groups,
+            erm_finetune_sample_mode=sample_mode,
+            erm_finetune_minority_weight=float(args.minority_weight),
             erm_env_adv_weight=env_adv_weight,
             erm_env_adv_hidden_dim=128 if env_adv_weight > 0.0 else 0,
             erm_env_adv_loss_weight=1.0,

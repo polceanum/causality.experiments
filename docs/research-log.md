@@ -631,3 +631,23 @@ signals. Keep this focused on what was tried and what was learned.
   It preserves most of the official DFR strength and is far more seed-stable
   than validation-split causal DFR, but the clue support/scale grid needs more
   targeted tuning before promotion.
+
+## 2026-05-01: Pivot To Upstream Conflict Sampling
+
+- The official clue-shrink screen landed at noise-scale deltas, so the main
+  research implementation shifted away from final-head/clue-grid tuning and
+  toward representation/data interventions before official DFR.
+- Added named ERM fine-tune sampling modes to
+  `scripts/prepare_waterbirds_features.py`: `natural`, `group_balanced`,
+  `conflict_upweight`, and `group_balanced_conflict_upweight`. The conflict
+  modes upweight Waterbirds train examples where bird label and background do
+  not match, which targets the minority/background-conflict groups before
+  feature extraction rather than only in the final head.
+- Extended `scripts/run_waterbirds_official_backbone_sweep.py` with
+  `--sample-modes` and `--minority-weight`, plus feature/run tags such as
+  `_conflictw3` and `_gbconflictw3`. The runner records the sampling mode in
+  expected manifest settings so cached feature artifacts remain auditable.
+- Verification: syntax checks passed, and focused feature-prep/backbone-search
+  tests passed with `19 passed`. No full Waterbirds feature extraction was run
+  yet; the next empirical step is a limited conflict-sampling screen before any
+  full CPU run.

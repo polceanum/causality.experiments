@@ -26,6 +26,12 @@ DEFAULT_FEATURES_CSV = DEFAULT_DATA_DIR / "features.csv"
 DEFAULT_CONFIG_PATH = Path("configs/benchmarks/waterbirds_features.yaml")
 SPLIT_MAP = {0: "train", 1: "val", 2: "test"}
 TORCHVISION_STUB_LIB: torch.library.Library | None = None
+ERM_SAMPLE_MODES = {
+    "natural",
+    "group_balanced",
+    "conflict_upweight",
+    "group_balanced_conflict_upweight",
+}
 
 
 @dataclass
@@ -383,6 +389,66 @@ def _balanced_group_sample_weights(metadata: pd.DataFrame) -> torch.Tensor:
     return tensor / tensor.mean()
 
 
+def _canonical_erm_sample_mode(sample_mode: str | None, *, balance_groups: bool = False) -> str:
+    key = (sample_mode or "").strip().lower().replace("-", "_")
+    if key in {"", "auto"}:
+        return "group_balanced" if balance_groups else "natural"
+    aliases = {
+        "none": "natural",
+        "erm": "natural",
+        "natural": "natural",
+        "balanced": "group_balanced",
+        "group": "group_balanced",
+        "group_balanced": "group_balanced",
+        "minority": "conflict_upweight",
+        "minority_upweight": "conflict_upweight",
+        "conflict": "conflict_upweight",
+        "conflict_upweight": "conflict_upweight",
+        "group_conflict": "group_balanced_conflict_upweight",
+        "balanced_conflict": "group_balanced_conflict_upweight",
+        "group_balanced_conflict": "group_balanced_conflict_upweight",
+        "group_balanced_conflict_upweight": "group_balanced_conflict_upweight",
+    }
+    try:
+        mode = aliases[key]
+    except KeyError as exc:
+        known = ", ".join(sorted(ERM_SAMPLE_MODES))
+        raise ValueError(f"ERM fine-tune sample mode must be one of: {known}.") from exc
+    if balance_groups and mode == "natural":
+        return "group_balanced"
+    return mode
+
+
+def _waterbirds_conflict_mask(metadata: pd.DataFrame) -> np.ndarray:
+    return metadata["y"].astype(int).to_numpy() != metadata["place"].astype(int).to_numpy()
+
+
+def _erm_finetune_sample_weights(
+    metadata: pd.DataFrame,
+    *,
+    sample_mode: str,
+    minority_weight: float,
+) -> torch.Tensor | None:
+    mode = _canonical_erm_sample_mode(sample_mode)
+    if mode == "natural":
+        return None
+    if minority_weight <= 0.0:
+        raise ValueError("erm_finetune_minority_weight must be positive.")
+    if mode == "group_balanced":
+        return _balanced_group_sample_weights(metadata)
+    conflict_weight = torch.tensor(
+        np.where(_waterbirds_conflict_mask(metadata), float(minority_weight), 1.0),
+        dtype=torch.double,
+    )
+    if mode == "conflict_upweight":
+        return conflict_weight / conflict_weight.mean()
+    if mode == "group_balanced_conflict_upweight":
+        weights = _balanced_group_sample_weights(metadata) * conflict_weight
+        return weights / weights.mean()
+    known = ", ".join(sorted(ERM_SAMPLE_MODES))
+    raise ValueError(f"ERM fine-tune sample mode must be one of: {known}.")
+
+
 def _make_optimizer(
     parameters: list[torch.nn.Parameter],
     *,
@@ -427,6 +493,8 @@ def train_erm_featurizer(
     optimizer_name: str,
     momentum: float,
     balance_groups: bool,
+    sample_mode: str = "natural",
+    minority_weight: float = 1.0,
     env_adv_weight: float = 0.0,
     env_adv_hidden_dim: int = 0,
     env_adv_loss_weight: float = 1.0,
@@ -444,11 +512,17 @@ def train_erm_featurizer(
     initial_mode = warmup_mode if warmup_epochs > 0 else mode
     _set_trainable_layers(model, initial_mode)
     dataset = WaterbirdsImageDataset(dataset_dir, train_metadata, transform)
+    resolved_sample_mode = _canonical_erm_sample_mode(sample_mode, balance_groups=balance_groups)
+    sample_weights = _erm_finetune_sample_weights(
+        train_metadata,
+        sample_mode=resolved_sample_mode,
+        minority_weight=minority_weight,
+    )
     sampler = None
     shuffle = True
-    if balance_groups:
+    if sample_weights is not None:
         sampler = WeightedRandomSampler(
-            _balanced_group_sample_weights(train_metadata),
+            sample_weights,
             num_samples=len(train_metadata),
             replacement=True,
         )
@@ -521,6 +595,8 @@ def train_erm_featurizer(
                     "epochs": epochs,
                     "batches": len(loader),
                     "train_examples": len(train_metadata),
+                    "sample_mode": resolved_sample_mode,
+                    "minority_weight": float(minority_weight),
                 },
                 sort_keys=True,
             ),
@@ -611,6 +687,8 @@ def _official_erm_settings() -> dict[str, Any]:
         "erm_finetune_momentum": 0.9,
         "erm_finetune_augment": True,
         "erm_finetune_balance_groups": False,
+        "erm_finetune_sample_mode": "natural",
+        "erm_finetune_minority_weight": 1.0,
         "erm_env_adv_weight": 0.0,
         "erm_env_adv_hidden_dim": 0,
         "erm_env_adv_loss_weight": 1.0,
@@ -642,6 +720,8 @@ def _resolve_erm_settings(
     eval_transform_style: str,
     feature_extractor_suffix: str,
     erm_finetune_preset: str | None,
+    erm_finetune_sample_mode: str = "natural",
+    erm_finetune_minority_weight: float = 1.0,
 ) -> dict[str, Any]:
     settings = {
         "batch_size": int(batch_size),
@@ -653,6 +733,11 @@ def _resolve_erm_settings(
         "erm_finetune_momentum": float(erm_finetune_momentum),
         "erm_finetune_augment": bool(erm_finetune_augment),
         "erm_finetune_balance_groups": bool(erm_finetune_balance_groups),
+        "erm_finetune_sample_mode": _canonical_erm_sample_mode(
+            erm_finetune_sample_mode,
+            balance_groups=bool(erm_finetune_balance_groups),
+        ),
+        "erm_finetune_minority_weight": float(erm_finetune_minority_weight),
         "erm_env_adv_weight": float(erm_env_adv_weight),
         "erm_env_adv_hidden_dim": int(erm_env_adv_hidden_dim),
         "erm_env_adv_loss_weight": float(erm_env_adv_loss_weight),
@@ -744,6 +829,8 @@ def extract_protocol_feature_matrix(
     erm_finetune_momentum: float,
     erm_finetune_augment: bool,
     erm_finetune_balance_groups: bool,
+    erm_finetune_sample_mode: str = "natural",
+    erm_finetune_minority_weight: float = 1.0,
     erm_env_adv_weight: float = 0.0,
     erm_env_adv_hidden_dim: int = 0,
     erm_env_adv_loss_weight: float = 1.0,
@@ -766,6 +853,8 @@ def extract_protocol_feature_matrix(
         erm_finetune_momentum=erm_finetune_momentum,
         erm_finetune_augment=erm_finetune_augment,
         erm_finetune_balance_groups=erm_finetune_balance_groups,
+        erm_finetune_sample_mode=erm_finetune_sample_mode,
+        erm_finetune_minority_weight=erm_finetune_minority_weight,
         erm_env_adv_weight=erm_env_adv_weight,
         erm_env_adv_hidden_dim=erm_env_adv_hidden_dim,
         erm_env_adv_loss_weight=erm_env_adv_loss_weight,
@@ -818,6 +907,8 @@ def extract_protocol_feature_matrix(
             optimizer_name=str(settings["erm_finetune_optimizer"]),
             momentum=float(settings["erm_finetune_momentum"]),
             balance_groups=bool(settings["erm_finetune_balance_groups"]),
+            sample_mode=str(settings["erm_finetune_sample_mode"]),
+            minority_weight=float(settings["erm_finetune_minority_weight"]),
             env_adv_weight=float(settings["erm_env_adv_weight"]),
             env_adv_hidden_dim=int(settings["erm_env_adv_hidden_dim"]),
             env_adv_loss_weight=float(settings["erm_env_adv_loss_weight"]),
@@ -840,7 +931,13 @@ def extract_protocol_feature_matrix(
             extractor_name = f"{model_name}_{suffix}"
         else:
             aug_tag = "aug" if bool(settings["erm_finetune_augment"]) else "noaug"
-            balance_tag = "groupbalanced" if bool(settings["erm_finetune_balance_groups"]) else "erm"
+            sample_mode = str(settings["erm_finetune_sample_mode"])
+            if sample_mode == "natural":
+                balance_tag = "erm"
+            elif sample_mode == "group_balanced":
+                balance_tag = "groupbalanced"
+            else:
+                balance_tag = sample_mode
             optimizer_tag = str(settings["erm_finetune_optimizer"]).strip().lower()
             adv_tag = ""
             if float(settings["erm_env_adv_weight"]) > 0.0:
@@ -947,6 +1044,8 @@ def prepare_waterbirds_features_artifact(
     erm_finetune_momentum: float = 0.9,
     erm_finetune_augment: bool = False,
     erm_finetune_balance_groups: bool = False,
+    erm_finetune_sample_mode: str = "natural",
+    erm_finetune_minority_weight: float = 1.0,
     erm_env_adv_weight: float = 0.0,
     erm_env_adv_hidden_dim: int = 0,
     erm_env_adv_loss_weight: float = 1.0,
@@ -983,6 +1082,8 @@ def prepare_waterbirds_features_artifact(
         erm_finetune_momentum=erm_finetune_momentum,
         erm_finetune_augment=erm_finetune_augment,
         erm_finetune_balance_groups=erm_finetune_balance_groups,
+        erm_finetune_sample_mode=erm_finetune_sample_mode,
+        erm_finetune_minority_weight=erm_finetune_minority_weight,
         erm_env_adv_weight=erm_env_adv_weight,
         erm_env_adv_hidden_dim=erm_env_adv_hidden_dim,
         erm_env_adv_loss_weight=erm_env_adv_loss_weight,
@@ -1046,6 +1147,8 @@ def prepare_waterbirds_features(
     erm_finetune_momentum: float = 0.9,
     erm_finetune_augment: bool = False,
     erm_finetune_balance_groups: bool = False,
+    erm_finetune_sample_mode: str = "natural",
+    erm_finetune_minority_weight: float = 1.0,
     erm_env_adv_weight: float = 0.0,
     erm_env_adv_hidden_dim: int = 0,
     erm_env_adv_loss_weight: float = 1.0,
@@ -1076,6 +1179,8 @@ def prepare_waterbirds_features(
         erm_finetune_momentum=erm_finetune_momentum,
         erm_finetune_augment=erm_finetune_augment,
         erm_finetune_balance_groups=erm_finetune_balance_groups,
+        erm_finetune_sample_mode=erm_finetune_sample_mode,
+        erm_finetune_minority_weight=erm_finetune_minority_weight,
         erm_env_adv_weight=erm_env_adv_weight,
         erm_env_adv_hidden_dim=erm_env_adv_hidden_dim,
         erm_env_adv_loss_weight=erm_env_adv_loss_weight,
@@ -1107,6 +1212,8 @@ def main() -> None:
     parser.add_argument("--erm-finetune-momentum", type=float, default=0.9)
     parser.add_argument("--erm-finetune-augment", action="store_true")
     parser.add_argument("--erm-finetune-balance-groups", action="store_true")
+    parser.add_argument("--erm-finetune-sample-mode", default="natural", choices=tuple(sorted(ERM_SAMPLE_MODES)))
+    parser.add_argument("--erm-finetune-minority-weight", type=float, default=1.0)
     parser.add_argument("--erm-env-adv-weight", type=float, default=0.0)
     parser.add_argument("--erm-env-adv-hidden-dim", type=int, default=0)
     parser.add_argument("--erm-env-adv-loss-weight", type=float, default=1.0)
@@ -1138,6 +1245,8 @@ def main() -> None:
         erm_finetune_momentum=args.erm_finetune_momentum,
         erm_finetune_augment=args.erm_finetune_augment,
         erm_finetune_balance_groups=args.erm_finetune_balance_groups,
+        erm_finetune_sample_mode=args.erm_finetune_sample_mode,
+        erm_finetune_minority_weight=args.erm_finetune_minority_weight,
         erm_env_adv_weight=args.erm_env_adv_weight,
         erm_env_adv_hidden_dim=args.erm_env_adv_hidden_dim,
         erm_env_adv_loss_weight=args.erm_env_adv_loss_weight,
