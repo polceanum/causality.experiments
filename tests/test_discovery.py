@@ -157,6 +157,20 @@ def test_row_rank_target_uses_utility_when_present() -> None:
     assert _row_rank_target(row, utility_blend=1.0) == 1.0
 
 
+def test_row_rank_target_can_blend_weak_language_clue() -> None:
+    row = {
+        "has_explicit_supervision": "false",
+        "has_cause_position": "false",
+        "corr_margin": "0.0",
+        "utility_target": "",
+        "utility_weight": "0.0",
+        "language_causal_score": "1.0",
+        "language_spurious_score": "0.0",
+        "language_confidence": "1.0",
+    }
+    assert _row_rank_target(row, utility_blend=0.0, weak_clue_blend=1.0) == 1.0
+
+
 def test_utility_loss_ignores_rows_without_utility_labels() -> None:
     import torch
 

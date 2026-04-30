@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import csv
 from pathlib import Path
 import sys
 
@@ -11,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from causality_experiments.clues import read_csv_rows, write_csv_rows
 from causality_experiments.config import load_config
 from causality_experiments.data import load_dataset
 from causality_experiments.discovery import (
@@ -18,6 +18,7 @@ from causality_experiments.discovery import (
     build_feature_clue_rows,
     clue_feature_vector,
     combine_discovery_scores,
+    merge_external_clue_rows,
 )
 
 
@@ -56,6 +57,7 @@ def main() -> None:
     parser.add_argument("--model", required=True)
     parser.add_argument("--config", required=True)
     parser.add_argument("--split", default="train")
+    parser.add_argument("--clues", action="append", default=[], help="External clue CSV to merge before scoring. Can be passed multiple times.")
     parser.add_argument("--out", required=True)
     parser.add_argument(
         "--restrict-to-config",
@@ -78,6 +80,11 @@ def main() -> None:
 
     bundle = load_dataset(load_config(Path(args.config)))
     rows = build_feature_clue_rows(bundle, split_name=args.split)
+    external_clues = []
+    for clue_path in args.clues:
+        external_clues.extend(read_csv_rows(Path(clue_path)))
+    if external_clues:
+        rows = merge_external_clue_rows(rows, external_clues)
     x = torch.tensor([clue_feature_vector(row, feature_columns) for row in rows], dtype=torch.float32)
     with torch.no_grad():
         rank_logits, support_logits = model(x)
@@ -103,11 +110,7 @@ def main() -> None:
     )
 
     out_path = Path(args.out)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with out_path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(scored_rows[0].keys()))
-        writer.writeheader()
-        writer.writerows(scored_rows)
+    write_csv_rows(out_path, scored_rows)
     print(out_path)
 
 

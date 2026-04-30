@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import torch
@@ -25,7 +26,61 @@ def _safe_ratio(numerator: float, denominator: float) -> float:
     return numerator / denominator
 
 
-def build_feature_clue_rows(bundle: DatasetBundle, split_name: str = "train") -> list[dict[str, Any]]:
+LANGUAGE_CLUE_FEATURE_COLUMNS = (
+    "language_causal_score",
+    "language_spurious_score",
+    "language_ambiguous_score",
+    "language_confidence",
+    "language_source_count",
+)
+
+IMAGE_CLUE_FEATURE_COLUMNS = (
+    "image_label_score",
+    "image_background_score",
+    "image_group_stability",
+    "image_prompt_margin",
+    "image_confidence",
+    "prototype_source_count",
+)
+
+BRIDGE_CLUE_FEATURE_COLUMNS = (
+    "top_activation_group_entropy",
+    "label_env_disentanglement",
+    "clue_source_count",
+)
+
+DISCOVERY_CLUE_AUDIT_COLUMNS = (
+    "language_prior_source",
+    "feature_card_path",
+    "clue_source_mask",
+)
+
+EXTERNAL_CLUE_COLUMNS = (
+    *LANGUAGE_CLUE_FEATURE_COLUMNS,
+    *IMAGE_CLUE_FEATURE_COLUMNS,
+    *BRIDGE_CLUE_FEATURE_COLUMNS,
+    *DISCOVERY_CLUE_AUDIT_COLUMNS,
+)
+
+
+def _default_external_clue_values() -> dict[str, Any]:
+    values: dict[str, Any] = {
+        key: 0.0
+        for key in (
+            *LANGUAGE_CLUE_FEATURE_COLUMNS,
+            *IMAGE_CLUE_FEATURE_COLUMNS,
+            *BRIDGE_CLUE_FEATURE_COLUMNS,
+        )
+    }
+    values.update({key: "" for key in DISCOVERY_CLUE_AUDIT_COLUMNS})
+    return values
+
+
+def build_feature_clue_rows(
+    bundle: DatasetBundle,
+    split_name: str = "train",
+    external_clues: Sequence[Mapping[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     split = bundle.split(split_name)
     x = split["x"]
     y = split["y"]
@@ -78,10 +133,84 @@ def build_feature_clue_rows(bundle: DatasetBundle, split_name: str = "train") ->
             "utility_weight": 0.0,
             "utility_value": float("nan"),
             "utility_count": 0.0,
+            **_default_external_clue_values(),
         }
+        row["label_env_disentanglement"] = abs(corr_margin)
         row["soft_causal_target"] = aggregate_soft_causal_target(row)
         rows.append(row)
+    if external_clues:
+        rows = merge_external_clue_rows(rows, external_clues)
     return rows
+
+
+def _clue_key(row: Mapping[str, Any]) -> tuple[str, str] | None:
+    feature_name = str(row.get("feature_name", "")).strip()
+    if not feature_name:
+        return None
+    return str(row.get("dataset", "")).strip(), feature_name
+
+
+def _clue_float(row: Mapping[str, Any], key: str) -> float:
+    value = row.get(key)
+    if value in (None, ""):
+        return 0.0
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if not torch.isfinite(torch.tensor(parsed)):
+        return 0.0
+    return parsed
+
+
+def _source_mask(row: Mapping[str, Any]) -> str:
+    sources = []
+    if _clue_float(row, "language_confidence") > 0.0:
+        sources.append("language")
+    if _clue_float(row, "image_confidence") > 0.0:
+        sources.append("image")
+    if _clue_float(row, "top_activation_group_entropy") > 0.0:
+        sources.append("bridge")
+    return ",".join(sources)
+
+
+def merge_external_clue_rows(
+    feature_rows: Sequence[Mapping[str, Any]],
+    external_clue_rows: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    exact: dict[tuple[str, str], Mapping[str, Any]] = {}
+    by_feature: dict[str, Mapping[str, Any]] = {}
+    for clue in external_clue_rows:
+        key = _clue_key(clue)
+        if key is None:
+            continue
+        dataset, feature_name = key
+        if dataset:
+            exact[(dataset, feature_name)] = clue
+        else:
+            by_feature[feature_name] = clue
+
+    key_columns = {"dataset", "split", "feature_index", "feature_name"}
+    merged_rows: list[dict[str, Any]] = []
+    for row in feature_rows:
+        updated = dict(row)
+        for key, value in _default_external_clue_values().items():
+            updated.setdefault(key, value)
+        feature_key = _clue_key(updated)
+        clue = None
+        if feature_key is not None:
+            dataset, feature_name = feature_key
+            clue = exact.get((dataset, feature_name)) or by_feature.get(feature_name)
+        if clue is not None:
+            for key, value in clue.items():
+                if key in key_columns:
+                    continue
+                updated[key] = value
+        source_mask = _source_mask(updated)
+        updated["clue_source_mask"] = source_mask
+        updated["clue_source_count"] = float(len([part for part in source_mask.split(",") if part]))
+        merged_rows.append(updated)
+    return merged_rows
 
 
 def aggregate_soft_causal_target(row: dict[str, Any]) -> float:
@@ -167,6 +296,13 @@ DISCOVERY_FEATURE_COLUMNS = (
     "modality_features",
     "modality_sequence",
     "task_classification",
+)
+
+DISCOVERY_FEATURE_COLUMNS_V2 = (
+    *DISCOVERY_FEATURE_COLUMNS,
+    *LANGUAGE_CLUE_FEATURE_COLUMNS,
+    *IMAGE_CLUE_FEATURE_COLUMNS,
+    *BRIDGE_CLUE_FEATURE_COLUMNS,
 )
 
 

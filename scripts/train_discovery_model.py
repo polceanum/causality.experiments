@@ -13,11 +13,18 @@ if str(ROOT) not in sys.path:
 
 from causality_experiments.discovery import (
     DISCOVERY_FEATURE_COLUMNS,
+    DISCOVERY_FEATURE_COLUMNS_V2,
     aggregate_rank_target,
     build_discovery_model,
     clue_feature_vector,
     combine_discovery_scores,
 )
+
+
+FEATURE_COLUMN_SETS = {
+    "v1": DISCOVERY_FEATURE_COLUMNS,
+    "v2": DISCOVERY_FEATURE_COLUMNS_V2,
+}
 
 
 def _pairwise_ranking_loss(logits: torch.Tensor, labels: torch.Tensor, dataset_ids: list[str], margin: float) -> torch.Tensor:
@@ -56,7 +63,53 @@ def _has_utility_supervision(row: dict[str, str]) -> bool:
     return utility_target is not None and (utility_weight or 0.0) > 0.0
 
 
-def _row_rank_target(row: dict[str, str], utility_blend: float) -> float:
+def _weak_clue_signal(row: dict[str, str]) -> tuple[float, float] | None:
+    targets = []
+    weights = []
+    language_confidence = _parse_optional_float(row.get("language_confidence")) or 0.0
+    language_causal = _parse_optional_float(row.get("language_causal_score")) or 0.0
+    language_spurious = _parse_optional_float(row.get("language_spurious_score")) or 0.0
+    language_total = language_causal + language_spurious
+    if language_confidence > 0.0 and language_total > 0.0:
+        targets.append(language_causal / language_total)
+        weights.append(language_confidence)
+
+    image_confidence = _parse_optional_float(row.get("image_confidence")) or 0.0
+    image_label = _parse_optional_float(row.get("image_label_score")) or 0.0
+    image_background = _parse_optional_float(row.get("image_background_score")) or 0.0
+    image_total = image_label + image_background
+    if image_confidence > 0.0 and image_total > 0.0:
+        targets.append(image_label / image_total)
+        weights.append(image_confidence)
+
+    if not targets:
+        return None
+    weight_tensor = torch.tensor(weights, dtype=torch.float32)
+    target_tensor = torch.tensor(targets, dtype=torch.float32)
+    target = float((target_tensor * weight_tensor).sum().item() / weight_tensor.sum().clamp_min(1e-12).item())
+    confidence = float(min(weight_tensor.sum().item(), 1.0))
+    return target, confidence
+
+
+def _has_weak_clue_supervision(row: dict[str, str]) -> bool:
+    signal = _weak_clue_signal(row)
+    return signal is not None and signal[1] > 0.0
+
+
+def _blend_weak_clue_target(row: dict[str, str], base_target: float, weak_clue_blend: float) -> float:
+    if str(row.get("has_explicit_supervision", "")).lower() == "true":
+        return base_target
+    if weak_clue_blend <= 0.0:
+        return base_target
+    signal = _weak_clue_signal(row)
+    if signal is None:
+        return base_target
+    weak_target, confidence = signal
+    blend = min(max(weak_clue_blend, 0.0), 1.0) * min(max(confidence, 0.0), 1.0)
+    return (1.0 - blend) * base_target + blend * weak_target
+
+
+def _row_rank_target(row: dict[str, str], utility_blend: float, weak_clue_blend: float = 0.0) -> float:
     prepared: dict[str, float | bool] = {}
     for key in (
         "has_explicit_supervision",
@@ -72,7 +125,15 @@ def _row_rank_target(row: dict[str, str], utility_blend: float) -> float:
     ):
         parsed = _parse_optional_float(row.get(key))
         prepared[key] = float("nan") if parsed is None else parsed
-    return aggregate_rank_target(prepared, utility_blend=utility_blend)
+    base_target = aggregate_rank_target(prepared, utility_blend=utility_blend)
+    return _blend_weak_clue_target(row, base_target, weak_clue_blend)
+
+
+def _row_support_target(row: dict[str, str], weak_clue_blend: float) -> float:
+    if row.get("has_explicit_supervision", "").lower() == "true":
+        return float(row["causal_target"])
+    base_target = float(row.get("soft_causal_target", 0.0))
+    return _blend_weak_clue_target(row, base_target, weak_clue_blend)
 
 
 def _utility_loss(rank_logits: torch.Tensor, rows: list[dict[str, str]]) -> torch.Tensor:
@@ -108,12 +169,17 @@ def main() -> None:
     parser.add_argument("--support-weight", type=float, default=0.5)
     parser.add_argument("--utility-loss-weight", type=float, default=0.5)
     parser.add_argument("--utility-target-blend", type=float, default=0.5)
+    parser.add_argument("--feature-set", choices=sorted(FEATURE_COLUMN_SETS), default="v1")
+    parser.add_argument("--include-weak-clues", action="store_true", help="Use nonzero language/image clue confidence as weak supervision rows.")
+    parser.add_argument("--weak-clue-target-blend", type=float, default=0.5, help="Maximum target blend from weak clue priors when --include-weak-clues is set.")
     parser.add_argument("--hidden-dim", type=int, default=32)
     parser.add_argument("--exclude-dataset", action="append", default=[], help="Dataset name to exclude from discovery supervision.")
     args = parser.parse_args()
 
     rows = list(csv.DictReader(Path(args.data).open("r", encoding="utf-8", newline="")))
     excluded = {name.strip() for name in args.exclude_dataset if name.strip()}
+    weak_clue_blend = args.weak_clue_target_blend if args.include_weak_clues else 0.0
+    feature_columns = FEATURE_COLUMN_SETS[args.feature_set]
     train_rows = [
         row
         for row in rows
@@ -121,30 +187,33 @@ def main() -> None:
         and (
             row.get("has_explicit_supervision", "").lower() == "true"
             or _has_utility_supervision(row)
+            or (args.include_weak_clues and _has_weak_clue_supervision(row))
         )
     ]
     if not train_rows:
-        raise ValueError("No explicit discovery supervision rows remain after filtering.")
+        raise ValueError("No discovery supervision rows remain after filtering.")
     x = torch.tensor(
-        [clue_feature_vector(row, DISCOVERY_FEATURE_COLUMNS) for row in train_rows],
+        [clue_feature_vector(row, feature_columns) for row in train_rows],
         dtype=torch.float32,
     )
     y = torch.tensor(
-        [_row_rank_target(row, utility_blend=args.utility_target_blend) for row in train_rows],
-        dtype=torch.float32,
-    ).unsqueeze(1)
-    support_y = torch.tensor(
         [
-            float(row["causal_target"])
-            if row.get("has_explicit_supervision", "").lower() == "true"
-            else float(row.get("soft_causal_target", 0.0))
+            _row_rank_target(
+                row,
+                utility_blend=args.utility_target_blend,
+                weak_clue_blend=weak_clue_blend,
+            )
             for row in train_rows
         ],
         dtype=torch.float32,
     ).unsqueeze(1)
+    support_y = torch.tensor(
+        [_row_support_target(row, weak_clue_blend=weak_clue_blend) for row in train_rows],
+        dtype=torch.float32,
+    ).unsqueeze(1)
     dataset_ids = [str(row["dataset"]) for row in train_rows]
 
-    model = build_discovery_model(len(DISCOVERY_FEATURE_COLUMNS), hidden_dim=args.hidden_dim)
+    model = build_discovery_model(len(feature_columns), hidden_dim=args.hidden_dim)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     for _ in range(args.epochs):
         opt.zero_grad(set_to_none=True)
@@ -177,12 +246,15 @@ def main() -> None:
     torch.save(
         {
             "state_dict": model.state_dict(),
-            "feature_columns": list(DISCOVERY_FEATURE_COLUMNS),
+            "feature_columns": list(feature_columns),
             "hidden_dim": args.hidden_dim,
             "train_summary": {
                 "rows": len(train_rows),
                 "datasets": sorted(set(dataset_ids)),
                 "excluded_datasets": sorted(excluded),
+                "feature_set": args.feature_set,
+                "include_weak_clues": bool(args.include_weak_clues),
+                "weak_clue_target_blend": weak_clue_blend,
                 "pointwise_loss": pointwise_loss,
                 "support_loss": support_loss,
                 "ranking_loss": ranking_loss,
