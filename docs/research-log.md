@@ -430,6 +430,7 @@ signals. Keep this focused on what was tried and what was learned.
 - The report now emits per-method Waterbirds rows with our latest WGA and
   accuracy, literature ERM/JTT/GroupDRO/DFR reference values, and gap-to-
   reference columns including gap to the best tracked WGA.
+
 - Added explicit benchmark states to the report output:
   `real_benchmark_ready`, `fixture_only`, `blocked_missing_local_data`, and
   `no_literature_reference`.
@@ -493,3 +494,38 @@ signals. Keep this focused on what was tried and what was learned.
   generators already present in the repo. It does not yet learn a discovery
   model, but it creates the reusable supervision substrate needed for that next
   step.
+
+## 2026-04-30: Multimodal Clue-Fusion Bridge
+
+- Added the first reproducible clue-fusion bridge:
+  feature-card generation, deterministic language clues, source score CSVs,
+  source-ablation reporting, and a Waterbirds clue-fusion sweep runner.
+- The bridge now handles opaque `feature_N` dimensions by using top/bottom
+  activation alignment. Label-aligned features receive causal-language weak
+  evidence; environment-aligned features receive spurious weak evidence. This
+  avoids relying on semantic feature names that official Waterbirds feature
+  tables do not have.
+- On `data/waterbirds/features_official_erm_official_repro.csv`, source
+  ablations showed the new language source is no longer neutral: language-only
+  top-64 had mean language causal score `1.000`, mean language confidence about
+  `0.814`, and only `26/64` overlap with the stats top-64. Fused top-64 had
+  `32/64` overlap with stats and kept a stronger correlation margin than
+  language-only.
+- A compact downstream screen through plain `official_dfr_val_tr` produced
+  identical metrics for stats, language, fused, heuristic, and random masks.
+  Interpretation: plain official DFR does not consume the causal mask or soft
+  feature scores, so it is not a valid clue-quality consumer.
+- The same compact screen through `official_causal_shrink_dfr_val_tr` with
+  `official_causal_shrink_prior: soft_scores` did consume the scores. With two
+  DFR retrains, fused top-64/top-128 reached about `0.9282` test WGA versus
+  about `0.9277` for stats/heuristic and `0.9273` for random.
+- A higher-retrain fused-only check using the default 20 retrains tied across
+  top-64, top-128, top-256, and top-512 at about `0.9315` test WGA and `0.9592`
+  validation WGA. This is better than the compact random control, but still
+  below the active `official_dfr_val_tr_retrains50` comparator at about
+  `0.9330`.
+- Interpretation: clue fusion now produces a measurable, auditable signal, but
+  the current soft-shrink consumer is too conservative to surpass the official
+  local comparator. The next mechanism iteration should use these clue scores
+  inside a stronger objective or image/prototype bridge, not promote the current
+  fused soft-shrink variant.

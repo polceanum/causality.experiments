@@ -19,6 +19,7 @@ WATERBIRDS_CAUSAL_TERMS = {
     "bird",
     "body",
     "feather",
+    "label",
     "landbird",
     "shape",
     "waterbird",
@@ -204,22 +205,19 @@ def build_language_clue_rows(
     for card in feature_cards:
         dataset = str(card.get("dataset", ""))
         causal_terms, spurious_terms, resolved_domain = _domain_terms(domain, dataset)
-        text = " ".join(
-            str(card.get(key, ""))
-            for key in (
-                "feature_name",
-                "semantic_hint",
-                "activation_alignment",
-                "feature_statement",
-            )
-        )
-        token_values = _tokens(text)
+        token_values = _tokens(str(card.get("feature_name", "")))
         causal_hits = sum(1 for token in token_values if token in causal_terms)
         spurious_hits = sum(1 for token in token_values if token in spurious_terms)
         alignment = str(card.get("activation_alignment", "")).strip().lower()
+        label_strength = abs(_float_value(card, "activation_label_gap"))
+        env_strength = abs(_float_value(card, "activation_env_gap"))
+        activation_confidence = min(abs(label_strength - env_strength) * 2.0, 1.0)
         if alignment == "label":
-            causal_hits += 1
+            causal_hits += 2
         elif alignment == "environment":
+            spurious_hits += 2
+        elif alignment == "mixed":
+            causal_hits += 1
             spurious_hits += 1
 
         evidence = float(causal_hits + spurious_hits)
@@ -232,7 +230,7 @@ def build_language_clue_rows(
             causal_score = causal_hits / evidence
             spurious_score = spurious_hits / evidence
             ambiguous_score = 1.0 - abs(causal_score - spurious_score)
-            confidence = min(evidence / 4.0, 1.0) * abs(causal_score - spurious_score)
+            confidence = max(min(evidence / 4.0, 1.0), activation_confidence) * abs(causal_score - spurious_score)
 
         rows.append(
             {

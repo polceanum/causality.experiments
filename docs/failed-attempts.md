@@ -99,6 +99,31 @@ issues unless they invalidate an experimental result.
   - Action: keep `adversarial_probe` as a promising image/tabular-style method,
     but develop factor/token-specific probe interventions next.
 
+## 2026-04-30
+
+- **Plain official DFR as a clue-fusion downstream consumer**
+  - Attempt: evaluate stats, language, fused, heuristic, and random top-k clue
+    masks through `official_dfr_val_tr` on official Waterbirds repro features.
+  - Result: all candidates returned identical validation/test metrics.
+  - Interpretation: plain official DFR does not consume `dataset.causal_mask`
+    or `causal_feature_scores`, so this screen cannot measure clue quality.
+  - Action: use `official_causal_shrink_dfr_val_tr` with soft-score priors, or
+    another method that actually consumes clue scores, for downstream clue
+    screens.
+
+- **Current fused language/statistics soft-shrink prior as a SOTA candidate**
+  - Attempt: use deterministic activation-alignment language clues fused with
+    statistical clues as soft-score priors for official causal-shrink DFR.
+  - Result: compact two-retrain screens showed a small fused lift over
+    stats/heuristic/random controls, but the default 20-retrain fused checks
+    tied across top-64 to top-512 at about `0.9315` test WGA.
+  - Interpretation: the clue signal is real enough to keep as a diagnostic, but
+    the current consumer does not clear the stronger
+    `official_dfr_val_tr_retrains50` comparator around `0.9330`.
+  - Action: do not promote this variant. Next work should add image/prototype
+    clues or use fused priors inside a stronger objective rather than only
+    conservative feature shrinkage.
+
 - **Fixture-level ceiling as evidence of SOTA**
   - Attempt: compose counterfactual augmentation with adversarial probe training
     and evaluate first on the Waterbirds-style fixture.

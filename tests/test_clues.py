@@ -71,6 +71,40 @@ def test_language_clues_score_domain_terms_and_card_statements(tmp_path: Path) -
     assert bird["language_prior_source"] == "template:waterbirds"
 
 
+def test_language_clues_use_activation_alignment_for_opaque_features() -> None:
+    clues = build_language_clue_rows(
+        [
+            {
+                "dataset": "waterbirds_features",
+                "split": "train",
+                "feature_index": 0,
+                "feature_name": "feature_0",
+                "activation_alignment": "label",
+                "activation_label_gap": 0.7,
+                "activation_env_gap": 0.1,
+                "top_group_entropy": 0.5,
+                "label_env_disentanglement": 0.2,
+            },
+            {
+                "dataset": "waterbirds_features",
+                "split": "train",
+                "feature_index": 1,
+                "feature_name": "feature_1",
+                "activation_alignment": "environment",
+                "activation_label_gap": 0.1,
+                "activation_env_gap": 0.7,
+                "top_group_entropy": 0.2,
+                "label_env_disentanglement": 0.1,
+            },
+        ],
+        domain="waterbirds",
+    )
+    by_name = {str(row["feature_name"]): row for row in clues}
+    assert float(by_name["feature_0"]["language_causal_score"]) > 0.9
+    assert float(by_name["feature_0"]["language_confidence"]) > 0.9
+    assert float(by_name["feature_1"]["language_spurious_score"]) > 0.9
+
+
 def test_feature_clue_rows_merge_language_clues_into_v2_vector(tmp_path: Path) -> None:
     csv_path = tmp_path / "features.csv"
     _write_waterbirds_features(csv_path)
