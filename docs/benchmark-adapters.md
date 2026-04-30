@@ -48,6 +48,11 @@ Optional causal mask for counterfactual methods:
   with the label exceeds their absolute correlation with the environment. Use
   `dataset.causal_mask_min_margin` and optional `dataset.causal_mask_top_k` to
   control the selection.
+- Or set `dataset.causal_mask_strategy: discovery_scores` with
+  `dataset.discovery_scores_path` pointing at a score CSV containing
+  `feature_name` and `score`. This is the preferred path for clue-fusion
+  artifacts because it preserves soft `causal_feature_scores` for consumers
+  such as soft-score `causal_dfr` and official causal-shrink DFR.
 - Without this mask, methods such as `counterfactual_adversarial` are
   intentionally unavailable on real feature tables.
 

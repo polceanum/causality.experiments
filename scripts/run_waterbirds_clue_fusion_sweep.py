@@ -15,7 +15,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from causality_experiments.clues import build_feature_cards, build_language_clue_rows, write_csv_rows
+from causality_experiments.clues import (
+    build_feature_cards,
+    build_image_prototype_clue_rows,
+    build_language_clue_rows,
+    write_csv_rows,
+)
 from causality_experiments.config import load_config
 from causality_experiments.data import load_dataset
 from causality_experiments.discovery import build_feature_clue_rows, merge_external_clue_rows
@@ -23,7 +28,7 @@ from causality_experiments.run import run_experiment
 from scripts.report_clue_source_ablation import summarize_source_ablation
 
 
-SOURCE_LABELS = ("stats", "language", "fused")
+SOURCE_LABELS = ("stats", "language", "image", "fused")
 
 
 def _safe_float(row: dict[str, Any], key: str) -> float:
@@ -50,13 +55,28 @@ def source_score(row: dict[str, Any], source: str) -> float:
     language_spurious = min(max(_safe_float(row, "language_spurious_score"), 0.0), 1.0)
     language_score = min(max(language_causal * language_confidence + 0.5 * (1.0 - language_confidence), 0.0), 1.0)
     language_penalized = min(max(language_score - 0.25 * language_confidence * language_spurious, 0.0), 1.0)
+    image_confidence = min(max(_safe_float(row, "image_confidence"), 0.0), 1.0)
+    image_label = min(max(_safe_float(row, "image_label_score"), 0.0), 1.0)
+    image_background = min(max(_safe_float(row, "image_background_score"), 0.0), 1.0)
+    image_score = min(max(image_label * image_confidence + 0.5 * (1.0 - image_confidence), 0.0), 1.0)
+    image_penalized = min(max(image_score - 0.25 * image_confidence * image_background, 0.0), 1.0)
     if source == "stats":
         return stats_score
     if source == "language":
         return language_penalized
+    if source == "image":
+        return image_penalized
     if source == "fused":
-        language_weight = 0.5 * language_confidence
-        return (1.0 - language_weight) * stats_score + language_weight * language_penalized
+        language_weight = 0.35 * language_confidence
+        image_weight = 0.35 * image_confidence
+        evidence_weight = min(language_weight + image_weight, 0.7)
+        if evidence_weight <= 0.0:
+            return stats_score
+        clue_score = (language_weight * language_penalized + image_weight * image_penalized) / max(
+            language_weight + image_weight,
+            1e-12,
+        )
+        return (1.0 - evidence_weight) * stats_score + evidence_weight * clue_score
     raise ValueError(f"Unknown clue score source {source!r}.")
 
 
@@ -231,13 +251,19 @@ def main() -> None:
 
     cards = build_feature_cards(bundle, split_name=args.split, top_k=args.card_top_k)
     language_clues = build_language_clue_rows(cards, domain="waterbirds")
-    clue_rows = merge_external_clue_rows(build_feature_clue_rows(bundle, split_name=args.split), language_clues)
+    image_clues = build_image_prototype_clue_rows(cards)
+    clue_rows = merge_external_clue_rows(
+        build_feature_clue_rows(bundle, split_name=args.split),
+        [*language_clues, *image_clues],
+    )
 
     cards_path = out_dir / "feature_cards.csv"
     language_path = out_dir / "language_clues.csv"
+    image_path = out_dir / "image_prototype_clues.csv"
     clue_path = out_dir / "merged_clues.csv"
     write_csv_rows(cards_path, cards)
     write_csv_rows(language_path, language_clues)
+    write_csv_rows(image_path, image_clues)
     write_csv_rows(clue_path, clue_rows)
 
     score_paths: dict[str, Path] = {}
@@ -265,6 +291,7 @@ def main() -> None:
         "training_device": args.training_device,
         "cards": str(cards_path),
         "language_clues": str(language_path),
+        "image_prototype_clues": str(image_path),
         "merged_clues": str(clue_path),
         "scores": {label: str(path) for label, path in score_paths.items()},
         "source_ablation": str(ablation_path),

@@ -529,3 +529,35 @@ signals. Keep this focused on what was tried and what was learned.
   local comparator. The next mechanism iteration should use these clue scores
   inside a stronger objective or image/prototype bridge, not promote the current
   fused soft-shrink variant.
+
+## 2026-04-30: Prototype Clues and Soft-Score Causal DFR
+
+- Added image/prototype clue rows from feature-card activation evidence. The
+  new source estimates whether a feature's top-activation prototype is more
+  label-aligned or background-aligned, emits image label/background scores,
+  group stability, prompt margin, and image confidence, and can be fused with
+  language and statistical priors.
+- Updated clue merging so multiple clue rows for the same feature compose
+  instead of overwriting each other. Merged clue rows now preserve language,
+  image, and bridge evidence together for v2 discovery vectors and score CSVs.
+- Added `image` as a first-class source in
+  `scripts/run_waterbirds_clue_fusion_sweep.py`. On official repro features,
+  image top-64 had high mean image label score (`0.933`) and confidence
+  (`0.716`) with only `9/64` overlap against stats, showing that it is a
+  distinct clue source. Fused top-64 kept a stronger correlation margin than
+  image-only while using both language and image evidence.
+- Added `configs/benchmarks/waterbirds_features_official_causal_dfr_soft.yaml`,
+  a stronger soft-score consumer that feeds clue-derived feature scores into
+  `causal_dfr` via `causal_dfr_nuisance_prior: soft_scores`, rather than only
+  scaling features for official causal-shrink DFR.
+- Downstream screen on
+  `data/waterbirds/features_official_erm_official_repro.csv`: stats, language,
+  image, fused, and heuristic top-64/top-128 soft-score causal DFR all reached
+  about `0.9401` test WGA and `0.9442` validation WGA; random controls were
+  slightly lower at about `0.9397` test WGA. This clears the active local
+  `official_dfr_val_tr_retrains50` comparator around `0.9330`.
+- Interpretation: the stronger objective is the meaningful step-change; the
+  image/prototype source is auditable and distinct, but the current downstream
+  objective is not very sensitive to source ranking among plausible top-k
+  priors. Promote the soft-score causal DFR path only after seed-stability
+  checks, and continue improving ranking sensitivity.

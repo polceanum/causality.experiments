@@ -1,11 +1,12 @@
 from pathlib import Path
 
-from causality_experiments.clues import build_feature_cards, build_language_clue_rows
+from causality_experiments.clues import build_feature_cards, build_image_prototype_clue_rows, build_language_clue_rows
 from causality_experiments.data import load_dataset
 from causality_experiments.discovery import (
     DISCOVERY_FEATURE_COLUMNS_V2,
     build_feature_clue_rows,
     clue_feature_vector,
+    merge_external_clue_rows,
 )
 
 
@@ -119,3 +120,36 @@ def test_feature_clue_rows_merge_language_clues_into_v2_vector(tmp_path: Path) -
     assert float(bird["language_causal_score"]) > 0.0
     assert len(vector) == len(DISCOVERY_FEATURE_COLUMNS_V2)
     assert vector[DISCOVERY_FEATURE_COLUMNS_V2.index("language_confidence")] > 0.0
+
+
+def test_image_prototype_clues_score_label_and_background_alignment(tmp_path: Path) -> None:
+    csv_path = tmp_path / "features.csv"
+    _write_waterbirds_features(csv_path)
+    bundle = _load_waterbirds_bundle(csv_path)
+    image_clues = build_image_prototype_clue_rows(build_feature_cards(bundle, top_k=2))
+
+    by_name = {str(row["feature_name"]): row for row in image_clues}
+    bird = by_name["bird_shape_0"]
+    background = by_name["background_0"]
+    assert float(bird["image_label_score"]) > float(bird["image_background_score"])
+    assert float(background["image_background_score"]) > float(background["image_label_score"])
+    assert float(bird["image_confidence"]) > 0.0
+
+
+def test_feature_clue_rows_merge_language_and_image_clues(tmp_path: Path) -> None:
+    csv_path = tmp_path / "features.csv"
+    _write_waterbirds_features(csv_path)
+    bundle = _load_waterbirds_bundle(csv_path)
+    base_rows = build_feature_clue_rows(bundle)
+    cards = build_feature_cards(bundle, top_k=2)
+
+    rows = merge_external_clue_rows(
+        base_rows,
+        [*build_language_clue_rows(cards, domain="waterbirds"), *build_image_prototype_clue_rows(cards)],
+    )
+
+    by_name = {str(row["feature_name"]): row for row in rows}
+    bird = by_name["bird_shape_0"]
+    assert float(bird["language_confidence"]) > 0.0
+    assert float(bird["image_confidence"]) > 0.0
+    assert bird["clue_source_mask"] == "language,image,bridge"

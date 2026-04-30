@@ -431,9 +431,9 @@ goal, not incidental development mechanics.
 
 ### Latest Clue-Fusion Status
 
-- The first clue-fusion bridge is implemented. It creates feature cards,
-  deterministic language clues, stats/language/fused score CSVs, and source
-  ablation reports. The main entrypoint is
+- The clue-fusion bridge now creates feature cards, deterministic language
+  clues, image/prototype activation clues, stats/language/image/fused score
+  CSVs, and source ablation reports. The main entrypoint is
   `scripts/run_waterbirds_clue_fusion_sweep.py`; source-ablation-only reports
   are available through `scripts/report_clue_source_ablation.py`.
 - On official Waterbirds repro features, deterministic language clues now
@@ -441,15 +441,19 @@ goal, not incidental development mechanics.
   feature names. Language-only top-k sets differ substantially from stats-only
   sets, and fused scores preserve some statistical margin while injecting
   label-alignment confidence.
-- Current clue-fusion downstream status: plain `official_dfr_val_tr` is not a
-  valid consumer because it ignores masks/scores; soft-score
-  `official_causal_shrink_dfr_val_tr` does consume them but the best current
-  fused 20-retrain single-seed check reaches about `0.9315` test WGA, below the
-  active `official_dfr_val_tr_retrains50` comparator around `0.9330`.
-- Next causal-discovery iteration should use the new clue-fusion artifacts as
-  the scoreboard and either add image/prototype clues or feed fused priors into
-  a stronger training objective. Do not promote the current fused soft-shrink
-  result as a SOTA candidate.
+- Current downstream status: plain `official_dfr_val_tr` is not a valid
+  consumer because it ignores masks/scores; soft-score
+  `official_causal_shrink_dfr_val_tr` consumes them but stayed below the active
+  comparator. The stronger `causal_dfr` soft-score objective in
+  `configs/benchmarks/waterbirds_features_official_causal_dfr_soft.yaml`
+  reached about `0.9401` single-seed test WGA on official repro features,
+  clearing the active `official_dfr_val_tr_retrains50` comparator around
+  `0.9330`.
+- Treat the soft-score causal DFR result as the current promotion candidate,
+  pending seed-stability checks. The clue ablation is useful, but downstream
+  stats/language/image/fused/heuristic top-k variants currently tie at the same
+  WGA, so the next improvement should increase ranking sensitivity rather than
+  only adding more score sources.
 
 1. Get a real Waterbirds-compatible feature run.
    - Use local features, real splits, labels, and group/background metadata.

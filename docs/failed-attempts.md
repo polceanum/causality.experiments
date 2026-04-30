@@ -124,6 +124,21 @@ issues unless they invalidate an experimental result.
     clues or use fused priors inside a stronger objective rather than only
     conservative feature shrinkage.
 
+- **Using source identity alone as proof of clue superiority**
+  - Attempt: add language, image/prototype, and fused score sources, then run
+    top-k downstream screens through the stronger soft-score `causal_dfr`
+    objective.
+  - Result: the stronger objective reached about `0.9401` test WGA and cleared
+    the active local DFR comparator, but stats, language, image, fused, and
+    heuristic top-k variants tied at the same WGA in the first single-seed
+    screen.
+  - Interpretation: the objective upgrade is promotable after seed checks, but
+    source-specific ranking superiority is not yet established by downstream
+    metrics even though ablation tables show distinct top-k sets.
+  - Action: keep source-ablation overlap and confidence metrics in the loop,
+    but require seed-stable downstream separation before claiming one clue
+    source is better than another.
+
 - **Fixture-level ceiling as evidence of SOTA**
   - Attempt: compose counterfactual augmentation with adversarial probe training
     and evaluate first on the Waterbirds-style fixture.

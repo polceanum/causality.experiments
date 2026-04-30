@@ -178,17 +178,24 @@ def merge_external_clue_rows(
     feature_rows: Sequence[Mapping[str, Any]],
     external_clue_rows: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
-    exact: dict[tuple[str, str], Mapping[str, Any]] = {}
-    by_feature: dict[str, Mapping[str, Any]] = {}
+    exact: dict[tuple[str, str], dict[str, Any]] = {}
+    by_feature: dict[str, dict[str, Any]] = {}
     for clue in external_clue_rows:
         key = _clue_key(clue)
         if key is None:
             continue
         dataset, feature_name = key
+        target: dict[str, dict[str, Any]]
+        target_key: tuple[str, str] | str
         if dataset:
-            exact[(dataset, feature_name)] = clue
+            target = exact
+            target_key = (dataset, feature_name)
         else:
-            by_feature[feature_name] = clue
+            target = by_feature
+            target_key = feature_name
+        merged = dict(target.get(target_key, {}))
+        merged.update(dict(clue))
+        target[target_key] = merged
 
     key_columns = {"dataset", "split", "feature_index", "feature_name"}
     merged_rows: list[dict[str, Any]] = []

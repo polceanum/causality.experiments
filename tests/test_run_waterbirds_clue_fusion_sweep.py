@@ -23,6 +23,19 @@ def test_source_score_uses_language_confidence_for_fused_score() -> None:
     assert 0.5 < source_score(row, "fused") < source_score(row, "language")
 
 
+def test_source_score_uses_image_confidence_for_fused_score() -> None:
+    row = {
+        "corr_margin": "0.0",
+        "soft_causal_target": "0.5",
+        "image_label_score": "1.0",
+        "image_background_score": "0.0",
+        "image_confidence": "1.0",
+    }
+    assert source_score(row, "stats") == 0.5
+    assert source_score(row, "image") > 0.9
+    assert 0.5 < source_score(row, "fused") < source_score(row, "image")
+
+
 def test_build_source_score_rows_emits_discovery_score_schema() -> None:
     rows = build_source_score_rows(
         [
@@ -41,7 +54,7 @@ def test_build_source_score_rows_emits_discovery_score_schema() -> None:
 
 
 def test_resolve_sources_accepts_comma_separated_unique_values() -> None:
-    assert resolve_sources(["fused,stats", "fused"]) == ["fused", "stats"]
+    assert resolve_sources(["fused,stats", "image", "fused"]) == ["fused", "stats", "image"]
 
 
 def test_build_downstream_candidate_uses_source_score_path() -> None:

@@ -252,6 +252,45 @@ def build_language_clue_rows(
     return rows
 
 
+def build_image_prototype_clue_rows(feature_cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for card in feature_cards:
+        label_strength = abs(_float_value(card, "activation_label_gap"))
+        background_strength = abs(_float_value(card, "activation_env_gap"))
+        total_strength = label_strength + background_strength
+        if total_strength <= 1e-12:
+            label_score = 0.5
+            background_score = 0.5
+            prompt_margin = 0.0
+            confidence = 0.0
+        else:
+            label_score = label_strength / total_strength
+            background_score = background_strength / total_strength
+            prompt_margin = label_score - background_score
+            separation = abs(prompt_margin)
+            group_stability = 1.0 - min(max(_float_value(card, "top_group_entropy"), 0.0), 1.0)
+            confidence = min(max(separation * (0.5 + 0.5 * group_stability), 0.0), 1.0)
+        group_stability = 1.0 - min(max(_float_value(card, "top_group_entropy"), 0.0), 1.0)
+        rows.append(
+            {
+                "dataset": card.get("dataset", ""),
+                "split": card.get("split", ""),
+                "feature_index": card.get("feature_index", ""),
+                "feature_name": card.get("feature_name", ""),
+                "image_label_score": f"{label_score:.6f}",
+                "image_background_score": f"{background_score:.6f}",
+                "image_group_stability": f"{group_stability:.6f}",
+                "image_prompt_margin": f"{prompt_margin:.6f}",
+                "image_confidence": f"{confidence:.6f}",
+                "prototype_source_count": f"{float(card.get('top_activation_count', 0) or 0):.6f}",
+                "feature_card_path": card.get("feature_card_path", card.get("feature_card_id", "")),
+                "top_activation_group_entropy": f"{_float_value(card, 'top_group_entropy'):.6f}",
+                "label_env_disentanglement": f"{_float_value(card, 'label_env_disentanglement'):.6f}",
+            }
+        )
+    return rows
+
+
 def read_csv_rows(path: Path) -> list[dict[str, str]]:
     with path.open("r", encoding="utf-8", newline="") as handle:
         return list(csv.DictReader(handle))
