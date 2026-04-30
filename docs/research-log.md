@@ -561,3 +561,26 @@ signals. Keep this focused on what was tried and what was learned.
   objective is not very sensitive to source ranking among plausible top-k
   priors. Promote the soft-score causal DFR path only after seed-stability
   checks, and continue improving ranking sensitivity.
+
+## 2026-04-30: Discovery Score Soft-Selection Diagnostic
+
+- Root cause for the tied top-k source screen: `discovery_score_top_k` changed
+  the hard `causal_mask`, but soft-score consumers still received the full
+  `causal_feature_scores` vector. That made top-k support less influential for
+  `causal_dfr` with `causal_dfr_nuisance_prior: soft_scores`.
+- Added `dataset.discovery_score_soft_selection: selected` as an opt-in data
+  adapter mode. It keeps the hard top-k selection behavior and zeros soft
+  scores outside the selected support, while preserving the old full-score
+  behavior as the default.
+- Added `--prune-soft-scores` to
+  `scripts/run_waterbirds_clue_fusion_sweep.py` for ranking-sensitivity
+  diagnostics. The default runner keeps full soft scores because that remains
+  the stronger downstream path.
+- Pruned diagnostic on official repro features through soft-score `causal_dfr`:
+  heuristic top-64/top-128 stayed at about `0.9401` test WGA; image top-64 and
+  random controls reached about `0.9397`; stats/language/fused mostly landed at
+  about `0.9392`, and fused top-128 fell to about `0.9388`.
+- Interpretation: pruning confirmed that source support can affect the soft
+  objective, but the first pruned variant is not an improvement. Keep the
+  full-score soft prior as the promotion candidate and use pruned mode only as
+  a diagnostic for future ranking objectives.

@@ -77,6 +77,25 @@ def test_build_downstream_candidate_uses_source_score_path() -> None:
     assert dataset["discovery_scores_path"] == "scores_fused.csv"
     assert dataset["discovery_score_top_k"] == 128
     assert dataset["discovery_score_threshold"] > 1.0
+    assert "discovery_score_soft_selection" not in dataset
+
+
+def test_build_downstream_candidate_can_prune_soft_scores() -> None:
+    candidate = build_downstream_candidate(
+        {
+            "name": "waterbirds_base",
+            "dataset": {
+                "kind": "waterbirds_features",
+                "path": "features.csv",
+                "causal_mask_strategy": "label_minus_env_correlation",
+            },
+        },
+        label="image",
+        top_k=64,
+        score_path=Path("scores_image.csv"),
+        prune_soft_scores=True,
+    )
+    assert candidate["dataset"]["discovery_score_soft_selection"] == "selected"
 
 
 def test_build_downstream_candidate_keeps_heuristic_control() -> None:
@@ -97,6 +116,7 @@ def test_build_downstream_candidate_keeps_heuristic_control() -> None:
     assert dataset["causal_mask_strategy"] == "label_minus_env_correlation"
     assert dataset["causal_mask_top_k"] == 64
     assert "discovery_scores_path" not in dataset
+    assert "discovery_score_soft_selection" not in dataset
 
 
 def test_with_dataset_path_overrides_config_without_mutating_original() -> None:

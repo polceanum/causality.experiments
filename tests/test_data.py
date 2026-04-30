@@ -205,6 +205,49 @@ def test_waterbirds_feature_adapter_discovery_top_k_overrides_threshold(tmp_path
     assert bundle.causal_mask.tolist() == [1.0, 0.0]
 
 
+def test_waterbirds_feature_adapter_can_prune_discovery_soft_scores_to_selection(tmp_path) -> None:
+    csv_path = tmp_path / "features.csv"
+    csv_path.write_text(
+        "\n".join(
+            [
+                "split,y,place,feature_0,feature_1,feature_2",
+                "train,0,0,0.0,1.0,0.0",
+                "train,1,1,1.0,0.0,1.0",
+                "val,0,1,0.2,0.8,0.1",
+                "val,1,0,0.8,0.2,0.9",
+                "test,0,0,0.1,0.9,0.2",
+                "test,1,1,0.9,0.1,0.8",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    score_path = tmp_path / "scores.csv"
+    score_path.write_text(
+        "dataset,feature_index,feature_name,score\n"
+        "waterbirds_features,0,feature_0,0.9\n"
+        "waterbirds_features,1,feature_1,0.7\n"
+        "waterbirds_features,2,feature_2,0.5\n",
+        encoding="utf-8",
+    )
+    bundle = load_dataset(
+        {
+            "dataset": {
+                "kind": "waterbirds_features",
+                "path": str(csv_path),
+                "causal_mask_strategy": "discovery_scores",
+                "discovery_scores_path": str(score_path),
+                "discovery_score_threshold": 2.0,
+                "discovery_score_top_k": 1,
+                "discovery_score_soft_selection": "selected",
+            }
+        }
+    )
+    assert bundle.causal_mask is not None
+    assert bundle.causal_mask.tolist() == [1.0, 0.0, 0.0]
+    assert bundle.metadata is not None
+    assert bundle.metadata["causal_feature_scores"] == [0.9, 0.0, 0.0]
+
+
 def test_waterbirds_feature_adapter_accepts_random_top_k_mask(tmp_path) -> None:
     csv_path = tmp_path / "features.csv"
     csv_path.write_text(

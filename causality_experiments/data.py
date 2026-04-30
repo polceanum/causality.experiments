@@ -349,7 +349,14 @@ def _feature_causal_mask_and_scores(
             ranked = sorted(score_map.items(), key=lambda item: item[1], reverse=True)[:top_k]
             selected_names.update(name for name, _ in ranked)
         values = [1.0 if col in selected_names else 0.0 for col in feature_cols]
-        score_values = [float(score_map.get(col, 0.0)) for col in feature_cols]
+        raw_scores = [float(score_map.get(col, 0.0)) for col in feature_cols]
+        soft_selection = str(config.get("discovery_score_soft_selection", "all")).strip().lower()
+        if soft_selection in {"", "all", "full", "raw"}:
+            score_values = raw_scores
+        elif soft_selection in {"selected", "top_k", "mask", "pruned"}:
+            score_values = [score if col in selected_names else 0.0 for col, score in zip(feature_cols, raw_scores, strict=True)]
+        else:
+            raise ValueError("discovery_score_soft_selection must be 'all' or 'selected'.")
     elif strategy == "random_top_k":
         top_k = int(config.get("causal_mask_top_k", 0) or 0)
         if top_k <= 0:

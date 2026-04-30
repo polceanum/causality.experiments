@@ -53,6 +53,10 @@ Optional causal mask for counterfactual methods:
   `feature_name` and `score`. This is the preferred path for clue-fusion
   artifacts because it preserves soft `causal_feature_scores` for consumers
   such as soft-score `causal_dfr` and official causal-shrink DFR.
+  By default, all CSV scores are retained as soft priors even when
+  `dataset.discovery_score_top_k` is used to build a hard mask. Set
+  `dataset.discovery_score_soft_selection: selected` to zero soft scores
+  outside the selected support for ranking-sensitivity diagnostics.
 - Without this mask, methods such as `counterfactual_adversarial` are
   intentionally unavailable on real feature tables.
 

@@ -122,6 +122,7 @@ def build_downstream_candidate(
     label: str,
     top_k: int,
     score_path: Path | None = None,
+    prune_soft_scores: bool = False,
 ) -> dict[str, Any]:
     config = deepcopy(base_config)
     base_name = str(config.get("name", "waterbirds_features"))
@@ -134,12 +135,17 @@ def build_downstream_candidate(
         dataset["discovery_scores_path"] = str(score_path)
         dataset["discovery_score_threshold"] = 2.0
         dataset["discovery_score_top_k"] = int(top_k)
+        if prune_soft_scores:
+            dataset["discovery_score_soft_selection"] = "selected"
+        else:
+            dataset.pop("discovery_score_soft_selection", None)
     elif label == "heuristic":
         dataset["causal_mask_strategy"] = str(dataset.get("causal_mask_strategy", "label_minus_env_correlation"))
         dataset["causal_mask_top_k"] = int(top_k)
         dataset.pop("discovery_scores_path", None)
         dataset.pop("discovery_score_threshold", None)
         dataset.pop("discovery_score_top_k", None)
+        dataset.pop("discovery_score_soft_selection", None)
     elif label == "random":
         dataset["causal_mask_strategy"] = "random_top_k"
         dataset["causal_mask_top_k"] = int(top_k)
@@ -147,6 +153,7 @@ def build_downstream_candidate(
         dataset.pop("discovery_scores_path", None)
         dataset.pop("discovery_score_threshold", None)
         dataset.pop("discovery_score_top_k", None)
+        dataset.pop("discovery_score_soft_selection", None)
     else:
         raise ValueError(f"Unknown downstream candidate label {label!r}.")
     config["dataset"] = dataset
@@ -189,6 +196,7 @@ def run_downstream_candidates(
     output_root: Path,
     include_heuristic: bool,
     include_random: bool,
+    prune_soft_scores: bool = False,
 ) -> list[dict[str, Any]]:
     labels = list(score_paths)
     if include_heuristic:
@@ -200,7 +208,13 @@ def run_downstream_candidates(
         tmp_root = Path(tmp_dir)
         for label in labels:
             for top_k in top_k_values:
-                candidate = build_downstream_candidate(base_config, label=label, top_k=top_k, score_path=score_paths.get(label))
+                candidate = build_downstream_candidate(
+                    base_config,
+                    label=label,
+                    top_k=top_k,
+                    score_path=score_paths.get(label),
+                    prune_soft_scores=prune_soft_scores,
+                )
                 config_path = tmp_root / f"{candidate['name']}.yaml"
                 config_path.write_text(yaml.safe_dump(candidate, sort_keys=False), encoding="utf-8")
                 run_dir = run_experiment(config_path, output_root)
@@ -231,6 +245,7 @@ def main() -> None:
     parser.add_argument("--out-dir", default="outputs/dfr_sweeps/clue_fusion", help="Directory for cards, clues, scores, ablations, and optional downstream rows.")
     parser.add_argument("--card-top-k", type=int, default=16, help="Top and bottom activation count per feature card.")
     parser.add_argument("--run-downstream", action="store_true", help="Run downstream top-k DFR candidates after writing source score files.")
+    parser.add_argument("--prune-soft-scores", action="store_true", help="For discovery-score candidates, zero soft scores outside the selected top-k support.")
     parser.add_argument("--include-heuristic", action="store_true")
     parser.add_argument("--include-random", action="store_true")
     parser.add_argument("--official-dfr-num-retrains", type=int, default=None, help="Optional compact-screen override for official DFR retrain count.")
@@ -304,10 +319,12 @@ def main() -> None:
             output_root=Path(args.output_root),
             include_heuristic=args.include_heuristic,
             include_random=args.include_random,
+            prune_soft_scores=args.prune_soft_scores,
         )
         downstream_path = out_dir / "downstream_results.csv"
         write_csv_rows(downstream_path, downstream_rows)
         manifest["downstream_results"] = str(downstream_path)
+        manifest["prune_soft_scores"] = bool(args.prune_soft_scores)
 
     manifest_path = out_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")

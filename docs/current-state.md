@@ -454,6 +454,11 @@ goal, not incidental development mechanics.
   stats/language/image/fused/heuristic top-k variants currently tie at the same
   WGA, so the next improvement should increase ranking sensitivity rather than
   only adding more score sources.
+- The data adapter now supports
+  `dataset.discovery_score_soft_selection: selected` to prune soft scores
+  outside a selected discovery-score support. The first pruned diagnostic
+  separated candidates slightly, but reduced WGA relative to the full-score
+  soft prior, so keep the full-score path as the current promotion candidate.
 
 1. Get a real Waterbirds-compatible feature run.
    - Use local features, real splits, labels, and group/background metadata.

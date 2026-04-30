@@ -139,6 +139,20 @@ issues unless they invalidate an experimental result.
     but require seed-stable downstream separation before claiming one clue
     source is better than another.
 
+- **Pruning discovery soft scores to top-k support as an immediate improvement**
+  - Attempt: make `discovery_score_top_k` affect soft-score consumers by
+    zeroing `causal_feature_scores` outside the selected support, then rerun
+    the clue-source screen through soft-score `causal_dfr`.
+  - Result: candidate rankings separated slightly, but the source-score variants
+    dropped below the full-score soft-prior result. Heuristic top-k remained
+    about `0.9401` test WGA, while stats/language/fused were mostly around
+    `0.9392` and fused top-128 fell to about `0.9388`.
+  - Interpretation: top-k pruning is useful for diagnostics but too lossy as a
+    default prior for the current objective.
+  - Action: keep `discovery_score_soft_selection: selected` and
+    `--prune-soft-scores` as opt-in diagnostics only; retain full soft scores
+    for the current promotion path.
+
 - **Fixture-level ceiling as evidence of SOTA**
   - Attempt: compose counterfactual augmentation with adversarial probe training
     and evaluate first on the Waterbirds-style fixture.
