@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -780,6 +781,24 @@ def _fit_validation_split_dfr(
     method = dict(config.get("method", {}))
     training = dict(config.get("training", {}))
     seed = int(config.get("seed", 0))
+    num_retrains = int(method.get("dfr_num_retrains", 1))
+    if num_retrains <= 0:
+        raise ValueError("dfr_num_retrains must be positive.")
+    if num_retrains > 1:
+        classifiers: list[nn.Linear] = []
+        for offset in range(num_retrains):
+            retrain_config = deepcopy(config)
+            retrain_config["seed"] = seed + offset
+            retrain_method = dict(retrain_config.get("method", {}))
+            retrain_method["dfr_num_retrains"] = 1
+            retrain_config["method"] = retrain_method
+            classifiers.append(_fit_validation_split_dfr(bundle, retrain_config, nuisance_mask=nuisance_mask).classifier)
+        averaged = nn.Linear(bundle.input_dim, bundle.output_dim)
+        with torch.no_grad():
+            averaged.weight.copy_(torch.stack([classifier.weight.detach().cpu() for classifier in classifiers]).mean(dim=0))
+            averaged.bias.copy_(torch.stack([classifier.bias.detach().cpu() for classifier in classifiers]).mean(dim=0))
+        device = _device(str(training.get("device", "auto")))
+        return DFRClassifier(averaged.to(device), device)
     torch.manual_seed(seed)
     device = _device(str(training.get("device", "auto")))
     split_name = str(method.get("dfr_split", "val"))

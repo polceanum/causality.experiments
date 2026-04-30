@@ -837,6 +837,45 @@ def test_causal_dfr_suppresses_nuisance_dimensions(tmp_path: Path) -> None:
     assert metrics["feature_importance/nuisance_to_causal"] < 0.2
 
 
+def test_causal_dfr_can_average_multiple_retrains(tmp_path: Path) -> None:
+    csv_path = tmp_path / "features.csv"
+    rows = [
+        "split,y,place,group,feature_0,feature_1",
+        "train,0,0,0,-1.0,-0.8",
+        "train,1,1,3,1.0,0.8",
+        "val,0,0,0,-1.0,-1.0",
+        "val,0,1,2,-1.1,1.0",
+        "val,1,0,1,1.0,-1.0",
+        "val,1,1,3,1.1,1.0",
+        "test,0,0,0,-1.0,-0.5",
+        "test,1,1,3,1.0,0.5",
+    ]
+    csv_path.write_text("\n".join(rows), encoding="utf-8")
+    config = {
+        "seed": 5,
+        "dataset": {
+            "kind": "waterbirds_features",
+            "path": str(csv_path),
+            "causal_feature_columns": ["feature_0"],
+        },
+        "method": {
+            "kind": "causal_dfr",
+            "dfr_epochs": 3,
+            "dfr_lr": 0.05,
+            "dfr_num_retrains": 2,
+            "causal_dfr_nuisance_weight": 1.0,
+        },
+        "training": {"device": "cpu", "batch_size": 4},
+    }
+    bundle = load_dataset(config)
+    model = fit_method(bundle, config)
+    predictions = model.predict(bundle.split("test")["x"])
+    importance = model.feature_importance()
+    assert predictions.shape == (2, 2)
+    assert importance is not None
+    assert importance.shape[0] == bundle.input_dim
+
+
 def test_representation_dfr_trains_head_on_learned_representations() -> None:
     config = {
         "seed": 3,

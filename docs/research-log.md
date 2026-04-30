@@ -584,3 +584,30 @@ signals. Keep this focused on what was tried and what was learned.
   objective, but the first pruned variant is not an improvement. Keep the
   full-score soft prior as the promotion candidate and use pruned mode only as
   a diagnostic for future ranking objectives.
+
+## 2026-04-30: Clue Seed-Stability Gate
+
+- Added `scripts/run_waterbirds_clue_seed_stability.py` to build clue-fusion
+  score artifacts once, then run a paired baseline/candidate seed sweep over
+  matched seeds. The runner writes raw rows, source ablations, a manifest, and
+  a promotion-gate summary JSON.
+- Ran a 3-seed check on official repro features for baseline
+  `official_dfr_val_tr` versus full-score soft `causal_dfr` fused/heuristic/
+  random top-64 candidates. The single-seed fused result at seed 101 still
+  reached about `0.9401`, but seeds 102 and 103 dropped to about `0.9020` and
+  `0.8754`. Mean fused test WGA was about `0.9058` versus the baseline at
+  about `0.9315`, so this path is not promotable.
+- Added `dfr_num_retrains` support to validation-split DFR/causal DFR. When
+  set above 1, the method trains heads at seed offsets and averages the linear
+  weights, mirroring the stabilizing idea used by official DFR retrains.
+- Added `configs/benchmarks/waterbirds_features_official_causal_dfr_soft_ensemble.yaml`
+  with `dfr_num_retrains: 3`. The 3-seed fused top-64 screen became much more
+  stable, with mean test WGA about `0.9216`, std about `0.0057`, and minimum
+  about `0.9143`, but it still trailed the official DFR baseline by about
+  `0.0099` mean WGA.
+- Tried an LBFGS head and a lighter nuisance weight as exploratory variants;
+  both failed to improve the paired seed result. Interpretation: the next
+  mechanism should not rely on the current validation-split causal DFR head as
+  the promotion vehicle. Keep the seed-stability runner and retrain averaging
+  as diagnostics, and move toward objectives that preserve the official DFR
+  baseline while injecting clue priors more locally.

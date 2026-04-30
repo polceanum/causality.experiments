@@ -132,9 +132,9 @@ issues unless they invalidate an experimental result.
     the active local DFR comparator, but stats, language, image, fused, and
     heuristic top-k variants tied at the same WGA in the first single-seed
     screen.
-  - Interpretation: the objective upgrade is promotable after seed checks, but
-    source-specific ranking superiority is not yet established by downstream
-    metrics even though ablation tables show distinct top-k sets.
+  - Interpretation: the objective upgrade looked promising before seed checks,
+    but source-specific ranking superiority is not yet established by
+    downstream metrics even though ablation tables show distinct top-k sets.
   - Action: keep source-ablation overlap and confidence metrics in the loop,
     but require seed-stable downstream separation before claiming one clue
     source is better than another.
@@ -152,6 +152,28 @@ issues unless they invalidate an experimental result.
   - Action: keep `discovery_score_soft_selection: selected` and
     `--prune-soft-scores` as opt-in diagnostics only; retain full soft scores
     for the current promotion path.
+
+- **Raw soft-score causal DFR as a seed-stable promotion candidate**
+  - Attempt: run paired seeds 101/102/103 for official DFR versus full-score
+    soft `causal_dfr` fused, heuristic, and random top-64 variants.
+  - Result: fused top-64 beat baseline on seed 101 by about `+0.0087` test WGA,
+    but lost on seeds 102 and 103 by about `-0.0295` and `-0.0561`; mean test
+    WGA was about `0.9058` versus official DFR at about `0.9315`.
+  - Interpretation: the single-seed result was optimizer/seed fragile and
+    cannot support promotion.
+  - Action: require `scripts/run_waterbirds_clue_seed_stability.py` before any
+    future clue-fusion promotion claim.
+
+- **DFR retrain averaging as sufficient stabilization**
+  - Attempt: add `dfr_num_retrains` and evaluate a 3-head averaged soft-score
+    causal DFR ensemble.
+  - Result: variance improved substantially, but mean fused top-64 test WGA was
+    only about `0.9216`, below the official DFR baseline by about `0.0099`.
+    LBFGS and a lighter nuisance penalty also failed exploratory screens.
+  - Interpretation: retrain averaging is a useful diagnostic and variance
+    reducer, but the current causal DFR head gives up too much mean WGA.
+  - Action: keep retrain averaging available, but move the clue priors into a
+    stronger official-DFR-compatible objective rather than promoting this head.
 
 - **Fixture-level ceiling as evidence of SOTA**
   - Attempt: compose counterfactual augmentation with adversarial probe training

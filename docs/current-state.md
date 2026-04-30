@@ -444,21 +444,24 @@ goal, not incidental development mechanics.
 - Current downstream status: plain `official_dfr_val_tr` is not a valid
   consumer because it ignores masks/scores; soft-score
   `official_causal_shrink_dfr_val_tr` consumes them but stayed below the active
-  comparator. The stronger `causal_dfr` soft-score objective in
-  `configs/benchmarks/waterbirds_features_official_causal_dfr_soft.yaml`
-  reached about `0.9401` single-seed test WGA on official repro features,
-  clearing the active `official_dfr_val_tr_retrains50` comparator around
-  `0.9330`.
-- Treat the soft-score causal DFR result as the current promotion candidate,
-  pending seed-stability checks. The clue ablation is useful, but downstream
-  stats/language/image/fused/heuristic top-k variants currently tie at the same
-  WGA, so the next improvement should increase ranking sensitivity rather than
-  only adding more score sources.
+  comparator. The stronger `causal_dfr` soft-score objective reached about
+  `0.9401` single-seed test WGA, but a paired 3-seed check did not survive:
+  fused top-64 averaged about `0.9058` test WGA versus the official DFR
+  baseline at about `0.9315`.
+- `scripts/run_waterbirds_clue_seed_stability.py` now runs paired baseline and
+  clue-source candidates over matched seeds. Use it before any promotion claim.
+  The clue ablation remains useful, but downstream stats/language/image/fused
+  support is not yet seed-stable enough to promote.
 - The data adapter now supports
   `dataset.discovery_score_soft_selection: selected` to prune soft scores
   outside a selected discovery-score support. The first pruned diagnostic
   separated candidates slightly, but reduced WGA relative to the full-score
-  soft prior, so keep the full-score path as the current promotion candidate.
+  soft prior.
+- `dfr_num_retrains` now enables weight-averaged DFR/causal-DFR heads. The
+  3-retrain soft-score ensemble was much more stable than raw Adam
+  (`~0.0057` test-WGA std for fused top-64), but averaged only about `0.9216`
+  test WGA, below the official DFR baseline. Treat it as a diagnostic stability
+  tool, not a promotion candidate.
 
 1. Get a real Waterbirds-compatible feature run.
    - Use local features, real splits, labels, and group/background metadata.
