@@ -175,6 +175,18 @@ issues unless they invalidate an experimental result.
   - Action: keep retrain averaging available, but move the clue priors into a
     stronger official-DFR-compatible objective rather than promoting this head.
 
+- **Official DFR soft clue shrink as an immediate promotion**
+  - Attempt: add an official-DFR-compatible soft-score shrink config and run a
+    paired 3-seed fused top-64 pruned clue screen.
+  - Result: the tuner selected nontrivial clue shrink values (`0.7`, `0.7`,
+    `0.8`) and produced low variance, but mean test WGA was about `0.9311`
+    versus official DFR at about `0.9315`; seed deltas were approximately
+    `+0.0002`, `-0.0029`, and `+0.0016`.
+  - Interpretation: this is not promotable yet, but it is a near-miss in the
+    right training path rather than a collapse.
+  - Action: keep the config as the next official-compatible baseline and tune
+    clue support/scale grids under the paired seed gate.
+
 - **Fixture-level ceiling as evidence of SOTA**
   - Attempt: compose counterfactual augmentation with adversarial probe training
     and evaluate first on the Waterbirds-style fixture.

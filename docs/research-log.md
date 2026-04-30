@@ -611,3 +611,23 @@ signals. Keep this focused on what was tried and what was learned.
   the promotion vehicle. Keep the seed-stability runner and retrain averaging
   as diagnostics, and move toward objectives that preserve the official DFR
   baseline while injecting clue priors more locally.
+
+## 2026-05-01: Official Clue-Shrink DFR Screen
+
+- Added `configs/benchmarks/waterbirds_features_official_clue_shrink_dfr_val_tr.yaml`,
+  an official DFR head that consumes discovery soft scores through the existing
+  causal-shrink feature-scale grid. The grid includes `1.0`, so the official
+  tuner can fall back to the no-shrink baseline when the clue prior hurts.
+- Ran `scripts/run_waterbirds_clue_seed_stability.py` on official repro
+  features for fused top-64 with pruned soft scores over seeds 101/102/103.
+  Baseline official DFR stayed at about `0.9315` test WGA. The clue-shrink
+  candidate averaged about `0.9311` with std about `0.0019`, min about
+  `0.9286`, and max about `0.9330`.
+- Paired deltas were about `+0.0002`, `-0.0029`, and `+0.0016`, so the
+  promotion gate failed. The selected shrink values were `0.7`, `0.7`, and
+  `0.8`, confirming that the official tuner used the clue prior rather than
+  always falling back to the baseline scale.
+- Interpretation: official-compatible clue injection is the best current path.
+  It preserves most of the official DFR strength and is far more seed-stable
+  than validation-split causal DFR, but the clue support/scale grid needs more
+  targeted tuning before promotion.

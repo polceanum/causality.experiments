@@ -462,6 +462,14 @@ goal, not incidental development mechanics.
   (`~0.0057` test-WGA std for fused top-64), but averaged only about `0.9216`
   test WGA, below the official DFR baseline. Treat it as a diagnostic stability
   tool, not a promotion candidate.
+- `configs/benchmarks/waterbirds_features_official_clue_shrink_dfr_val_tr.yaml`
+  moves the fused clue prior into the official DFR feature-scaling hook. The
+  first paired fused top-64 pruned screen averaged about `0.9311` test WGA
+  versus the official DFR baseline at about `0.9315`; seeds 101 and 103 won
+  slightly, seed 102 lost, and the promotion gate failed. This is a much closer
+  non-promotion than the validation-split causal DFR path, so the next iteration
+  should tune the official-compatible clue scaling/support rather than abandon
+  that route.
 
 1. Get a real Waterbirds-compatible feature run.
    - Use local features, real splits, labels, and group/background metadata.
