@@ -151,6 +151,7 @@ def main() -> None:
         source_tag = f"{_backbone_tag(str(backbone_name))}{_source_tag(str(weights_variant), str(eval_transform_style))}"
         tag = f"official_e{epochs}_lr{lr:g}_envadv{env_adv_weight:g}{balance_tag}{source_tag}{limit_tag}_seed{seed}"
         features_csv = Path(args.features_dir) / f"features_{tag}.csv"
+        features_csv.parent.mkdir(parents=True, exist_ok=True)
         feature_extractor_suffix = f"waterbirds_official_backbone_e{epochs}_lr{lr:g}_envadv{env_adv_weight:g}{balance_tag}{source_tag}{limit_tag}_seed{seed}_penultimate"
         expected_settings = _resolve_erm_settings(
             batch_size=args.batch_size,

@@ -342,6 +342,7 @@ def test_run_waterbirds_official_backbone_sweep_passes_limit_to_feature_prep(tmp
     def fake_prepare(**kwargs: object) -> PreparedWaterbirdsFeatures:
         seen.update(kwargs)
         features_csv = Path(kwargs["features_csv"])
+        assert features_csv.parent.exists()
         features_csv.write_text("split,y,place,group,feature_0\ntrain,0,0,0,0.0\n", encoding="utf-8")
         return PreparedWaterbirdsFeatures(
             features_csv=features_csv,
@@ -412,6 +413,8 @@ def test_run_waterbirds_official_backbone_sweep_passes_limit_to_feature_prep(tmp
             "0.001",
             "--env-adv-weights",
             "0.0",
+            "--features-dir",
+            str(tmp_path / "missing" / "waterbirds"),
             "--limit",
             "48",
             "--output-root",
