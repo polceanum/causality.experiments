@@ -705,3 +705,110 @@ signals. Keep this focused on what was tried and what was learned.
   representation mechanism, not more small conflict-sampling schedule tweaks.
 - Verification: focused tests passed with `20 passed`, and the full regression
   suite passed with `131 passed`.
+
+## 2026-05-01: Global Supervised Contrastive Feature Prep
+
+- Added an opt-in global supervised-contrastive objective to the Waterbirds
+  image feature-prep trainer. Positive pairs are same bird label across
+  different backgrounds, while same-background/different-label examples are
+  exposed as hard negatives in the denominator. The objective is disabled by
+  default and is controlled by `erm_finetune_contrastive_weight`,
+  `erm_finetune_contrastive_temperature`, and
+  `erm_finetune_contrastive_hard_negative_weight`.
+- Added `erm_finetune_seed` to the feature-prep path and wired the official
+  backbone sweep seed into image fine-tuning. This fixed an experiment-control
+  gap: previous Track B seed tags controlled DFR and filenames, but not the
+  stochastic backbone fine-tune itself.
+- Extended `scripts/run_waterbirds_official_backbone_sweep.py` with
+  contrastive flags and `_supconw..._t...` tags, and added loss-component
+  logging so future screens show CE and contrastive terms separately.
+- Verification: focused feature-prep/backbone-search tests passed with
+  `22 passed`, and the full regression suite passed with `133 passed`.
+- First seeded limit384 diagnostics used e5, LR `0.001`, no env-adv, natural
+  sampling, seed `101`, CPU, and a separate `data/waterbirds/seeded_screens`
+  feature directory:
+  - no-contrastive control: base test WGA `0.84375`, official DFR test WGA
+    `0.71875`.
+  - contrastive `w=0.05`, `t=0.2`: base test WGA `0.84375`, official DFR test
+    WGA `0.71875`.
+  - contrastive `w=0.2`, `t=0.15`: base test WGA `0.84375`, official DFR test
+    WGA `0.71875`.
+- Feature matrices were not identical: versus the seeded control, the weak
+  contrastive run had feature-difference L2 about `1.76`, and the stronger run
+  had L2 about `9.32`. So the objective is wired and moving the representation,
+  but global label/background contrast alone did not improve the downstream DFR
+  decision surface on the diagnostic slice.
+- Interpretation: do not scale these global supervised-contrastive recipes to
+  full Waterbirds runs. The next bird-background separation attempt should add
+  localization/component structure, such as patch/object features or a cheap
+  DINO/PCA component split, then reuse the official DFR and clue machinery on
+  those decomposed representations.
+
+## 2026-05-01: Decomposed DINO/Center-Background Features
+
+- Added `feature_decomposition: center_background` to the Waterbirds feature
+  export path. It runs the feature model over the full image, a center crop,
+  and four corner crops, then exports concatenated full, center, averaged
+  background, and center-minus-background features. The mode is opt-in and
+  recorded in manifests and official backbone sweep tags as `_decompcenterbg`.
+- Added a DINO/ViT-native frozen Hugging Face backbone mode,
+  `hf_patch_components`, that pools full-image patch tokens into CLS,
+  center-patch, corner-background, and center-minus-background components in one
+  forward pass. This is much cheaper than six crop forwards and closer to the
+  DINO-style patch decomposition idea.
+- Verification: focused Waterbirds tests passed with `24 passed`, and the full
+  regression suite passed with `135 passed`.
+- Limit384 screens with seed `101` and official DFR scoring:
+  - seeded e5 ResNet control from the prior round: official DFR test WGA
+    `0.71875`.
+  - seeded e5 ResNet with `center_background`: `0.78125` test WGA and
+    `0.8984375` test accuracy.
+  - frozen ResNet50 ImageNet-V2 with `center_background`: `0.75` test WGA.
+  - frozen local DINOv2-small with crop `center_background`: `0.875` test WGA
+    and `0.9375` test accuracy, including under the retrains50 DFR config.
+  - frozen local DINOv2-small `hf_patch_components`: `0.875` test WGA and
+    `0.9140625` test accuracy, also unchanged under retrains50.
+- Feature dimensionality checks: ResNet crop decomposition exports `8192`
+  features; DINO crop decomposition and DINO patch components each export
+  `1536` features.
+- No-limit seed101 screen for DINO patch components with
+  `official_dfr_val_tr_retrains50` reached test WGA `0.9112149477005005` and
+  accuracy `0.9368311762809753`, below the official local comparator around
+  `0.9330`. The full crop-decomposed DINO export was stopped after the long
+  run produced no feature artifact or prepare-stage output, so it needs a more
+  efficient extraction path before it is a practical full-data screen.
+- Interpretation: decomposition is the first branch in this round to move the
+  limit diagnostic in the right direction, especially with DINO features, but
+  the current patch-component full run is not a benchmark improvement. Future
+  work should either make crop-DINO extraction efficient enough to finish or
+  improve patch-token component selection beyond fixed center/corner pooling.
+
+## 2026-05-01: Component-Aware Patch Intervention Infrastructure
+
+- Started the component-causal implementation track. Waterbirds feature export
+  now names decomposed columns by component group instead of only anonymous
+  numeric indices. Examples include `feature_cls_*`, `feature_center_*`,
+  `feature_foreground_*`, `feature_background_*`, and difference-component
+  names. The prepared feature manifest now records `feature_columns` and
+  `feature_components`, giving downstream discovery scores a stable map from
+  feature name to component group.
+- Added selector-style Hugging Face patch pooling modes on top of the existing
+  fixed center/corner DINO path. `hf_patch_cls_components` pools top and bottom
+  patch tokens by cosine similarity to the CLS token; `hf_patch_norm_components`
+  pools top and bottom patch tokens by token norm. Both export CLS,
+  foreground-like, background-like, and difference summaries through the same
+  feature CSV path.
+- Added `causality_experiments.patch_interventions`, a lightweight latent-token
+  intervention module. It can select patches from CLS-similarity or token-norm
+  scores, replace selected tokens with zero, image mean, donor tokens, or
+  prototype centroids, rebuild hidden states, and summarize counterfactual
+  target-logit deltas, prediction flip rates, correct-to-wrong rates, and
+  group-conditioned effects.
+- Interpretation: this does not yet claim a Waterbirds improvement. It creates
+  the missing bridge between patch decomposition and causal discovery: patch
+  components can now be named, probed, counterfactually edited, and converted
+  into discovery-compatible evidence before downstream DFR or causal-shrink
+  consumers use them.
+- Verification: focused feature-prep and patch-intervention tests passed with
+  `26 passed`; adjacent discovery/clue/sweep tests passed with `30 passed`;
+  the full regression suite passed with `145 passed`.

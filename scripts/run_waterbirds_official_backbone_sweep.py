@@ -20,7 +20,10 @@ if str(ROOT) not in sys.path:
 from causality_experiments.config import load_config
 from causality_experiments.run import run_experiment
 from scripts.prepare_waterbirds_features import (
+    FEATURE_DECOMPOSITION_MODES,
     _canonical_erm_sample_mode,
+    _canonical_feature_decomposition,
+    _feature_decomposition_tag,
     _resolve_erm_settings,
     prepare_waterbirds_features_artifact,
 )
@@ -40,6 +43,16 @@ def _settings_match_status(expected: dict[str, Any], actual: dict[str, Any]) -> 
         if key == "erm_finetune_minority_weight" and actual_value is None and float(value) == 1.0:
             continue
         if key == "erm_finetune_sample_warmup_epochs" and actual_value is None and int(value) == 0:
+            continue
+        if key == "erm_finetune_contrastive_weight" and actual_value is None and float(value) == 0.0:
+            continue
+        if key == "erm_finetune_contrastive_temperature" and actual_value is None and float(value) == 0.1:
+            continue
+        if key == "erm_finetune_contrastive_hard_negative_weight" and actual_value is None and float(value) == 1.0:
+            continue
+        if key == "erm_finetune_seed" and actual_value is None and value is None:
+            continue
+        if key == "feature_decomposition" and actual_value is None and value == "none":
             continue
         if actual_value != value:
             mismatches.append(key)
@@ -101,6 +114,15 @@ def _sample_mode_tag(sample_mode: str, minority_weight: float, sample_warmup_epo
     return base
 
 
+def _contrastive_tag(contrastive_weight: float, temperature: float, hard_negative_weight: float) -> str:
+    if contrastive_weight <= 0.0:
+        return ""
+    tag = f"_supconw{_tag_value(f'{contrastive_weight:g}')}_t{_tag_value(f'{temperature:g}')}"
+    if hard_negative_weight != 1.0:
+        tag = f"{tag}_hn{_tag_value(f'{hard_negative_weight:g}')}"
+    return tag
+
+
 def _row(
     tag: str,
     seed: int,
@@ -149,6 +171,10 @@ def main() -> None:
     parser.add_argument("--sample-modes", nargs="*", default=[])
     parser.add_argument("--minority-weight", type=float, default=1.0)
     parser.add_argument("--sample-warmup-epochs", type=int, default=0)
+    parser.add_argument("--contrastive-weight", type=float, default=0.0)
+    parser.add_argument("--contrastive-temperature", type=float, default=0.1)
+    parser.add_argument("--contrastive-hard-negative-weight", type=float, default=1.0)
+    parser.add_argument("--feature-decompositions", nargs="*", default=["none"], choices=tuple(sorted(FEATURE_DECOMPOSITION_MODES)))
     parser.add_argument("--warmup-epochs", type=int, default=0)
     parser.add_argument("--warmup-mode", choices=("head", "layer4", "all"), default="head")
     parser.add_argument(
@@ -171,7 +197,17 @@ def main() -> None:
     rows: list[dict[str, Any]] = []
     sample_modes = args.sample_modes or (["group_balanced"] if args.balance_groups else ["natural"])
 
-    for seed, epochs, lr, env_adv_weight, backbone_name, weights_variant, eval_transform_style, sample_mode_raw in itertools.product(
+    for (
+        seed,
+        epochs,
+        lr,
+        env_adv_weight,
+        backbone_name,
+        weights_variant,
+        eval_transform_style,
+        sample_mode_raw,
+        feature_decomposition_raw,
+    ) in itertools.product(
         args.seeds,
         args.epochs,
         args.lrs,
@@ -180,15 +216,23 @@ def main() -> None:
         args.weights_variants,
         args.eval_transform_styles,
         sample_modes,
+        args.feature_decompositions,
     ):
         sample_mode = _canonical_erm_sample_mode(str(sample_mode_raw), balance_groups=bool(args.balance_groups))
+        feature_decomposition = _canonical_feature_decomposition(str(feature_decomposition_raw))
         limit_tag = f"_limit{args.limit}" if args.limit is not None else ""
         balance_tag = _sample_mode_tag(sample_mode, float(args.minority_weight), int(args.sample_warmup_epochs))
+        contrastive_tag = _contrastive_tag(
+            float(args.contrastive_weight),
+            float(args.contrastive_temperature),
+            float(args.contrastive_hard_negative_weight),
+        )
+        decomposition_tag = _feature_decomposition_tag(feature_decomposition)
         source_tag = f"{_backbone_tag(str(backbone_name))}{_source_tag(str(weights_variant), str(eval_transform_style))}"
-        tag = f"official_e{epochs}_lr{lr:g}_envadv{env_adv_weight:g}{balance_tag}{source_tag}{limit_tag}_seed{seed}"
+        tag = f"official_e{epochs}_lr{lr:g}_envadv{env_adv_weight:g}{balance_tag}{contrastive_tag}{decomposition_tag}{source_tag}{limit_tag}_seed{seed}"
         features_csv = Path(args.features_dir) / f"features_{tag}.csv"
         features_csv.parent.mkdir(parents=True, exist_ok=True)
-        feature_extractor_suffix = f"waterbirds_official_backbone_e{epochs}_lr{lr:g}_envadv{env_adv_weight:g}{balance_tag}{source_tag}{limit_tag}_seed{seed}_penultimate"
+        feature_extractor_suffix = f"waterbirds_official_backbone_e{epochs}_lr{lr:g}_envadv{env_adv_weight:g}{balance_tag}{contrastive_tag}{decomposition_tag}{source_tag}{limit_tag}_seed{seed}_penultimate"
         balance_groups = sample_mode in {"group_balanced", "group_balanced_conflict_upweight"}
         expected_settings = _resolve_erm_settings(
             batch_size=args.batch_size,
@@ -203,6 +247,11 @@ def main() -> None:
             erm_finetune_sample_mode=sample_mode,
             erm_finetune_minority_weight=float(args.minority_weight),
             erm_finetune_sample_warmup_epochs=int(args.sample_warmup_epochs),
+            erm_finetune_contrastive_weight=float(args.contrastive_weight),
+            erm_finetune_contrastive_temperature=float(args.contrastive_temperature),
+            erm_finetune_contrastive_hard_negative_weight=float(args.contrastive_hard_negative_weight),
+            erm_finetune_seed=seed if int(epochs) > 0 else None,
+            feature_decomposition=feature_decomposition,
             erm_env_adv_weight=env_adv_weight,
             erm_env_adv_hidden_dim=128 if env_adv_weight > 0.0 else 0,
             erm_env_adv_loss_weight=1.0,
@@ -240,6 +289,10 @@ def main() -> None:
                     "features_csv": str(features_csv),
                     "sample_mode": sample_mode,
                     "sample_warmup_epochs": int(args.sample_warmup_epochs),
+                    "contrastive_weight": float(args.contrastive_weight),
+                    "contrastive_temperature": float(args.contrastive_temperature),
+                    "contrastive_hard_negative_weight": float(args.contrastive_hard_negative_weight),
+                    "feature_decomposition": feature_decomposition,
                 },
                 sort_keys=True,
             ),
@@ -267,6 +320,11 @@ def main() -> None:
             erm_finetune_sample_mode=sample_mode,
             erm_finetune_minority_weight=float(args.minority_weight),
             erm_finetune_sample_warmup_epochs=int(args.sample_warmup_epochs),
+            erm_finetune_contrastive_weight=float(args.contrastive_weight),
+            erm_finetune_contrastive_temperature=float(args.contrastive_temperature),
+            erm_finetune_contrastive_hard_negative_weight=float(args.contrastive_hard_negative_weight),
+            erm_finetune_seed=seed if int(epochs) > 0 else None,
+            feature_decomposition=feature_decomposition,
             erm_env_adv_weight=env_adv_weight,
             erm_env_adv_hidden_dim=128 if env_adv_weight > 0.0 else 0,
             erm_env_adv_loss_weight=1.0,

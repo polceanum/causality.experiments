@@ -217,6 +217,7 @@ def test_run_waterbirds_official_backbone_sweep_smoke(tmp_path: Path, monkeypatc
                 "erm_env_adv_loss_weight": 1.0,
                 "erm_finetune_warmup_epochs": 0,
                 "erm_finetune_warmup_mode": "head",
+                "erm_finetune_seed": seed,
                 "weights_variant": "legacy_pretrained",
                 "eval_transform_style": "official",
                 "feature_extractor_suffix": f"waterbirds_official_backbone_e{epochs}_lr{lr:g}_envadv{env_adv_weight:g}_seed{seed}_penultimate",
@@ -373,6 +374,7 @@ def test_run_waterbirds_official_backbone_sweep_passes_limit_to_feature_prep(tmp
                 "erm_env_adv_loss_weight": 1.0,
                 "erm_finetune_warmup_epochs": 0,
                 "erm_finetune_warmup_mode": "head",
+                "erm_finetune_seed": 101,
                 "weights_variant": "legacy_pretrained",
                 "eval_transform_style": "official",
                 "feature_extractor_suffix": "waterbirds_official_backbone_e1_lr0.001_envadv0_limit48_seed101_penultimate",
@@ -472,6 +474,7 @@ def test_run_waterbirds_official_backbone_sweep_tags_group_balanced_features(tmp
                 "erm_env_adv_loss_weight": 1.0,
                 "erm_finetune_warmup_epochs": 0,
                 "erm_finetune_warmup_mode": "head",
+                "erm_finetune_seed": 101,
                 "weights_variant": "legacy_pretrained",
                 "eval_transform_style": "official",
                 "feature_extractor_suffix": "waterbirds_official_backbone_e1_lr0.001_envadv0_gb_limit48_seed101_penultimate",
@@ -568,14 +571,19 @@ def test_run_waterbirds_official_backbone_sweep_tags_staged_conflict_sample_mode
                 "erm_finetune_sample_mode": "conflict_upweight",
                 "erm_finetune_minority_weight": 3.0,
                 "erm_finetune_sample_warmup_epochs": 1,
+                "erm_finetune_contrastive_weight": 0.2,
+                "erm_finetune_contrastive_temperature": 0.15,
+                "erm_finetune_contrastive_hard_negative_weight": 2.0,
                 "erm_env_adv_weight": 0.0,
                 "erm_env_adv_hidden_dim": 0,
                 "erm_env_adv_loss_weight": 1.0,
                 "erm_finetune_warmup_epochs": 0,
                 "erm_finetune_warmup_mode": "head",
+                "erm_finetune_seed": 101,
+                "feature_decomposition": "center_background",
                 "weights_variant": "legacy_pretrained",
                 "eval_transform_style": "official",
-                "feature_extractor_suffix": "waterbirds_official_backbone_e1_lr0.001_envadv0_conflictw3_samplewarm1_limit48_seed101_penultimate",
+                "feature_extractor_suffix": "waterbirds_official_backbone_e1_lr0.001_envadv0_conflictw3_samplewarm1_supconw0p2_t0p15_hn2_decompcenterbg_limit48_seed101_penultimate",
                 "erm_finetune_preset": "",
             },
         )
@@ -619,6 +627,14 @@ def test_run_waterbirds_official_backbone_sweep_tags_staged_conflict_sample_mode
             "3.0",
             "--sample-warmup-epochs",
             "1",
+            "--contrastive-weight",
+            "0.2",
+            "--contrastive-temperature",
+            "0.15",
+            "--contrastive-hard-negative-weight",
+            "2.0",
+            "--feature-decompositions",
+            "center_background",
             "--limit",
             "48",
             "--output-root",
@@ -636,9 +652,14 @@ def test_run_waterbirds_official_backbone_sweep_tags_staged_conflict_sample_mode
     assert seen["erm_finetune_sample_mode"] == "conflict_upweight"
     assert seen["erm_finetune_minority_weight"] == 3.0
     assert seen["erm_finetune_sample_warmup_epochs"] == 1
+    assert seen["erm_finetune_contrastive_weight"] == 0.2
+    assert seen["erm_finetune_contrastive_temperature"] == 0.15
+    assert seen["erm_finetune_contrastive_hard_negative_weight"] == 2.0
+    assert seen["erm_finetune_seed"] == 101
+    assert seen["feature_decomposition"] == "center_background"
     assert seen["erm_finetune_balance_groups"] is False
-    assert str(seen["features_csv"]).endswith("features_official_e1_lr0.001_envadv0_conflictw3_samplewarm1_limit48_seed101.csv")
-    assert summary["candidates"][0]["tag"] == "official_e1_lr0.001_envadv0_conflictw3_samplewarm1_limit48"
+    assert str(seen["features_csv"]).endswith("features_official_e1_lr0.001_envadv0_conflictw3_samplewarm1_supconw0p2_t0p15_hn2_decompcenterbg_limit48_seed101.csv")
+    assert summary["candidates"][0]["tag"] == "official_e1_lr0.001_envadv0_conflictw3_samplewarm1_supconw0p2_t0p15_hn2_decompcenterbg_limit48"
 
 
 def test_run_waterbirds_official_backbone_sweep_tags_alternate_representation_source(tmp_path: Path, monkeypatch) -> None:

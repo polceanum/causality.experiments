@@ -27,7 +27,7 @@ goal, not incidental development mechanics.
   development signals.
 - `main` is pushed to GitHub.
 - Latest pushed commit before the current working round:
-  - `9026d6a` `Log conflict sampling screen`
+  - `db4564b` `Add staged Waterbirds sampling`
 - The repo contains a runnable PyTorch experiment harness for all 8 paper
   experiments using tiny generated fixtures.
 - Runnable methods:
@@ -386,6 +386,51 @@ goal, not incidental development mechanics.
   reached only test WGA `0.8125`. This is below the old e5 no-conflict
   limit384 anchor (`0.84375`), so do not launch a full run for this staged
   conflict recipe.
+- Track B now also supports opt-in cross-environment supervised contrastive
+  fine-tuning through `erm_finetune_contrastive_weight`,
+  `erm_finetune_contrastive_temperature`, and
+  `erm_finetune_contrastive_hard_negative_weight`. Positive pairs are same
+  bird label across different backgrounds; same-background/different-label
+  examples are available as hard negatives. The feature-prep path now also
+  records and applies `erm_finetune_seed`, and the official backbone sweep
+  passes its seed into image fine-tuning so feature-generation screens are
+  reproducible rather than only DFR-seeded. Seeded limit384 diagnostics with
+  e5/LR `0.001`, no env-adv, and seed `101` did not improve downstream DFR:
+  the seeded no-contrastive control, contrastive `w=0.05,t=0.2`, and stronger
+  `w=0.2,t=0.15` all reached official DFR test WGA `0.71875`. Feature matrices
+  did move (`L2` deltas about `1.76` and `9.32` versus control), but the DFR
+  decision surface did not improve. Do not launch full runs for these global
+  supervised-contrastive recipes; the next representation step should add
+  localization/component structure rather than only global label contrast.
+- Track B now supports lightweight decomposed feature export. The
+  `center_background` mode concatenates full-image features, center-crop
+  features, averaged corner-background features, and their center-minus-
+  background difference. A frozen Hugging Face `hf_patch_components` backbone
+  mode also pools ViT/DINO patch tokens into CLS, center-patch,
+  corner-background, and center-minus-background components from a single full
+  image. Limit384 diagnostics gave the first positive local signal from this
+  branch: seeded e5 ResNet features improved downstream official DFR from the
+  seeded control `0.71875` to `0.78125`; frozen DINOv2-small crop decomposition
+  and DINO patch components both reached `0.875` test WGA. However, the first
+  no-limit DINO patch-component run with `official_dfr_val_tr_retrains50`
+  reached only `0.9112149477005005` test WGA, below the locked official
+  comparator around `0.9330`. The full crop-decomposed DINO export was stopped
+  after a long no-output run and should be revisited only with a more efficient
+  extraction path. Treat DINO decomposition as mechanistically promising on the
+  diagnostic slice but not yet a benchmark improvement.
+- The next component-causal implementation slice has started. Decomposed
+  exports now preserve component-aware feature names such as `feature_cls_*`,
+  `feature_foreground_*`, and `feature_background_*`, and feature manifests
+  record `feature_columns` plus `feature_components` so discovery scores can
+  map back to patch-derived groups instead of anonymous dimensions. Hugging
+  Face patch pooling now also supports selector-style component modes:
+  `hf_patch_cls_components` uses CLS-similarity top/bottom patch tokens, and
+  `hf_patch_norm_components` uses token-norm top/bottom patch tokens. A new
+  `causality_experiments.patch_interventions` module provides latent patch
+  selectors, zero/mean/donor/prototype replacement helpers, and summary metrics
+  for counterfactual logit effects. This is infrastructure only so far; the
+  next empirical step is to run limit384 screens for the new selector pooling
+  modes and produce intervention reports against random/donor controls.
 - The first new Track A configs are:
   - `waterbirds_features_official_adv_representation_dfr_score_gate`
   - `waterbirds_features_official_adv_representation_dfr_nuisance_regularized`

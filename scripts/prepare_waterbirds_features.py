@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass, field
 import json
+import math
 from pathlib import Path
+import random
 import tarfile
 from typing import Any
 import urllib.request
@@ -32,6 +34,7 @@ ERM_SAMPLE_MODES = {
     "conflict_upweight",
     "group_balanced_conflict_upweight",
 }
+FEATURE_DECOMPOSITION_MODES = {"none", "center_background"}
 
 
 @dataclass
@@ -43,6 +46,8 @@ class PreparedWaterbirdsFeatures:
     split_definition: str
     base_metrics: dict[str, float]
     resolved_settings: dict[str, Any] = field(default_factory=dict)
+    feature_columns: list[str] = field(default_factory=list)
+    feature_components: dict[str, list[str]] = field(default_factory=dict)
 
 
 class _GradientReverse(torch.autograd.Function):
@@ -75,6 +80,95 @@ class WaterbirdsImageDataset(Dataset):
         with Image.open(image_path) as handle:
             image = handle.convert("RGB")
         return self.transform(image), idx
+
+
+class WaterbirdsImageViewDataset(Dataset):
+    def __init__(self, root_dir: Path, metadata: pd.DataFrame, transform: Any, feature_decomposition: str) -> None:
+        self.root_dir = root_dir
+        self.metadata = metadata.reset_index(drop=True)
+        self.transform = transform
+        self.feature_decomposition = _canonical_feature_decomposition(feature_decomposition)
+
+    def __len__(self) -> int:
+        return len(self.metadata)
+
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, int]:
+        row = self.metadata.iloc[idx]
+        image_path = self.root_dir / str(row["img_filename"])
+        with Image.open(image_path) as handle:
+            image = handle.convert("RGB")
+        views = _waterbirds_decomposition_views(image, self.feature_decomposition)
+        return torch.stack([self.transform(view) for view in views]), idx
+
+
+def _canonical_feature_decomposition(feature_decomposition: str | None) -> str:
+    mode = (feature_decomposition or "none").strip().lower().replace("-", "_")
+    aliases = {
+        "": "none",
+        "center_bg": "center_background",
+        "center_background_corners": "center_background",
+    }
+    mode = aliases.get(mode, mode)
+    if mode not in FEATURE_DECOMPOSITION_MODES:
+        known = ", ".join(sorted(FEATURE_DECOMPOSITION_MODES))
+        raise ValueError(f"Feature decomposition must be one of: {known}.")
+    return mode
+
+
+def _center_crop_box(width: int, height: int, fraction: float) -> tuple[int, int, int, int]:
+    crop_width = max(1, int(round(width * fraction)))
+    crop_height = max(1, int(round(height * fraction)))
+    left = max(0, (width - crop_width) // 2)
+    top = max(0, (height - crop_height) // 2)
+    return left, top, min(width, left + crop_width), min(height, top + crop_height)
+
+
+def _corner_crop_boxes(width: int, height: int, fraction: float) -> list[tuple[int, int, int, int]]:
+    crop_width = max(1, int(round(width * fraction)))
+    crop_height = max(1, int(round(height * fraction)))
+    return [
+        (0, 0, crop_width, crop_height),
+        (width - crop_width, 0, width, crop_height),
+        (0, height - crop_height, crop_width, height),
+        (width - crop_width, height - crop_height, width, height),
+    ]
+
+
+def _waterbirds_decomposition_views(image: Image.Image, feature_decomposition: str) -> list[Image.Image]:
+    mode = _canonical_feature_decomposition(feature_decomposition)
+    if mode == "none":
+        return [image]
+    width, height = image.size
+    center = image.crop(_center_crop_box(width, height, 0.65))
+    corners = [image.crop(box) for box in _corner_crop_boxes(width, height, 0.45)]
+    return [image, center, *corners]
+
+
+def _compose_decomposed_view_features(view_features: torch.Tensor, feature_decomposition: str) -> torch.Tensor:
+    mode = _canonical_feature_decomposition(feature_decomposition)
+    if mode == "none":
+        return view_features[:, 0, :]
+    full_features = view_features[:, 0, :]
+    center_features = view_features[:, 1, :]
+    background_features = view_features[:, 2:, :].mean(dim=1)
+    return torch.cat(
+        [
+            full_features,
+            center_features,
+            background_features,
+            center_features - background_features,
+        ],
+        dim=1,
+    )
+
+
+def _feature_decomposition_tag(feature_decomposition: str) -> str:
+    mode = _canonical_feature_decomposition(feature_decomposition)
+    if mode == "none":
+        return ""
+    if mode == "center_background":
+        return "_decompcenterbg"
+    return f"_decomp{mode}"
 
 
 def choose_device(name: str) -> torch.device:
@@ -198,10 +292,97 @@ class FrozenHuggingFaceVisionBackbone(torch.nn.Module):
         return hidden[:, 0]
 
 
+def _topk_patch_mask(scores: torch.Tensor, *, count: int, largest: bool) -> torch.Tensor:
+    if scores.ndim != 2:
+        raise ValueError("Patch selection scores must have shape [batch, patches].")
+    resolved_count = min(max(1, int(count)), int(scores.shape[1]))
+    indices = torch.topk(scores, k=resolved_count, dim=1, largest=largest).indices
+    mask = torch.zeros_like(scores, dtype=torch.bool)
+    return mask.scatter(1, indices, True)
+
+
+def _masked_patch_mean(patches: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    if mask.shape != patches.shape[:2]:
+        raise ValueError("Patch mask must match the batch and patch dimensions.")
+    weights = mask.to(dtype=patches.dtype).unsqueeze(-1)
+    denominator = weights.sum(dim=1).clamp_min(1.0)
+    return (patches * weights).sum(dim=1) / denominator
+
+
+def _hf_patch_component_features(hidden: torch.Tensor, *, pooling: str = "center_background") -> torch.Tensor:
+    if hidden.ndim != 3 or hidden.shape[1] < 2:
+        raise ValueError("Patch component pooling requires a sequence of CLS plus patch tokens.")
+    cls_features = hidden[:, 0]
+    patches = hidden[:, 1:]
+    patch_count = int(patches.shape[1])
+    pooling_key = pooling.strip().lower().replace("-", "_")
+    if pooling_key in {"center_background", "patch_center_background", "patch_components"}:
+        grid_size = int(math.sqrt(patch_count))
+        if grid_size * grid_size != patch_count:
+            raise ValueError("Patch component pooling requires a square patch grid.")
+        grid = patches.reshape(patches.shape[0], grid_size, grid_size, patches.shape[2])
+        indices = torch.arange(grid_size, device=hidden.device)
+        row = indices[:, None]
+        col = indices[None, :]
+        center_start = max(0, grid_size // 4)
+        center_end = min(grid_size, grid_size - center_start)
+        center_mask = (row >= center_start) & (row < center_end) & (col >= center_start) & (col < center_end)
+        corner_width = max(1, grid_size // 4)
+        corner_rows = (row < corner_width) | (row >= grid_size - corner_width)
+        corner_cols = (col < corner_width) | (col >= grid_size - corner_width)
+        background_mask = corner_rows & corner_cols
+        center_features = grid[:, center_mask, :].mean(dim=1)
+        background_features = grid[:, background_mask, :].mean(dim=1)
+    elif pooling_key in {"cls_similarity", "patch_cls_similarity", "patch_cls_components"}:
+        scores = torch.nn.functional.cosine_similarity(patches.float(), cls_features[:, None, :].float(), dim=2)
+        count = max(1, patch_count // 4)
+        foreground_mask = _topk_patch_mask(scores, count=count, largest=True)
+        background_mask = _topk_patch_mask(scores, count=count, largest=False)
+        center_features = _masked_patch_mean(patches, foreground_mask)
+        background_features = _masked_patch_mean(patches, background_mask)
+    elif pooling_key in {"token_norm", "patch_token_norm", "patch_norm_components"}:
+        scores = torch.linalg.vector_norm(patches.float(), dim=2)
+        count = max(1, patch_count // 4)
+        foreground_mask = _topk_patch_mask(scores, count=count, largest=True)
+        background_mask = _topk_patch_mask(scores, count=count, largest=False)
+        center_features = _masked_patch_mean(patches, foreground_mask)
+        background_features = _masked_patch_mean(patches, background_mask)
+    else:
+        raise ValueError("Patch component pooling must be one of: center_background, cls_similarity, token_norm.")
+    return torch.cat(
+        [
+            cls_features,
+            center_features,
+            background_features,
+            center_features - background_features,
+        ],
+        dim=1,
+    )
+
+
+def _hf_patch_center_background_features(hidden: torch.Tensor) -> torch.Tensor:
+    return _hf_patch_component_features(hidden, pooling="center_background")
+
+
+class FrozenHuggingFacePatchComponentBackbone(torch.nn.Module):
+    def __init__(self, model: torch.nn.Module, *, pooling: str = "center_background") -> None:
+        super().__init__()
+        self.model = model
+        self.pooling = pooling
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        output = self.model(pixel_values=x)
+        hidden = getattr(output, "last_hidden_state", None)
+        if hidden is None:
+            raise ValueError("Hugging Face vision model output has no last_hidden_state for patch components.")
+        return _hf_patch_component_features(hidden, pooling=self.pooling)
+
+
 def build_frozen_hf_vision_backbone(
     *,
     model_id: str,
     local_files_only: bool = False,
+    pooling: str = "cls",
 ) -> tuple[torch.nn.Module, Any, str]:
     try:
         from transformers import AutoImageProcessor, AutoModel, CLIPVisionModel
@@ -222,6 +403,20 @@ def build_frozen_hf_vision_backbone(
         return encoded["pixel_values"][0]
 
     safe_model_id = model_id.replace("/", "_").replace("-", "_").replace(".", "_")
+    pooling_key = pooling.strip().lower()
+    pooling_aliases = {
+        "patch_center_background": ("center_background", "patch_center_background"),
+        "patch_components": ("center_background", "patch_center_background"),
+        "patch_cls_similarity": ("cls_similarity", "patch_cls_similarity"),
+        "patch_cls_components": ("cls_similarity", "patch_cls_similarity"),
+        "patch_token_norm": ("token_norm", "patch_token_norm"),
+        "patch_norm_components": ("token_norm", "patch_token_norm"),
+    }
+    if pooling_key in pooling_aliases:
+        resolved_pooling, name_suffix = pooling_aliases[pooling_key]
+        return FrozenHuggingFacePatchComponentBackbone(model, pooling=resolved_pooling), transform, f"hf_{safe_model_id}_{name_suffix}"
+    if pooling_key != "cls":
+        raise ValueError("Hugging Face vision pooling must be one of: cls, patch_center_background, patch_cls_similarity, patch_token_norm.")
     return FrozenHuggingFaceVisionBackbone(model), transform, f"hf_{safe_model_id}_vision"
 
 
@@ -339,12 +534,53 @@ def load_metadata(dataset_dir: Path, limit: int | None = None) -> pd.DataFrame:
     return metadata
 
 
-def build_feature_frame(metadata: pd.DataFrame, feature_matrix: torch.Tensor) -> pd.DataFrame:
+def _feature_columns_for_components(feature_dim: int, component_names: list[str]) -> tuple[list[str], dict[str, list[str]]]:
+    if feature_dim <= 0:
+        raise ValueError("Feature matrix must have at least one column.")
+    if not component_names:
+        component_names = ["global"]
+    if feature_dim % len(component_names) != 0:
+        columns = [f"feature_{index}" for index in range(feature_dim)]
+        return columns, {"global": columns}
+    component_dim = feature_dim // len(component_names)
+    columns: list[str] = []
+    groups: dict[str, list[str]] = {}
+    for component in component_names:
+        safe_component = component.strip().lower().replace("-", "_").replace(" ", "_")
+        component_columns = [f"feature_{safe_component}_{index:04d}" for index in range(component_dim)]
+        columns.extend(component_columns)
+        groups[safe_component] = component_columns
+    return columns, groups
+
+
+def _feature_component_names(*, resolved_settings: dict[str, Any], extractor_name: str) -> list[str]:
+    feature_decomposition = _canonical_feature_decomposition(str(resolved_settings.get("feature_decomposition", "none")))
+    if feature_decomposition != "none":
+        return ["full", "center", "background", "center_minus_background"]
+    backbone_name = str(resolved_settings.get("backbone_name", "")).strip().lower()
+    extractor_key = extractor_name.strip().lower()
+    if backbone_name in {"hf_patch_components", "hf_patch"} or "patch_center_background" in extractor_key:
+        return ["cls", "center", "background", "center_minus_background"]
+    if backbone_name in {"hf_patch_cls_components", "hf_patch_cls"} or "patch_cls_similarity" in extractor_key:
+        return ["cls", "foreground", "background", "foreground_minus_background"]
+    if backbone_name in {"hf_patch_norm_components", "hf_patch_norm"} or "patch_token_norm" in extractor_key:
+        return ["cls", "foreground", "background", "foreground_minus_background"]
+    return ["global"]
+
+
+def build_feature_frame(
+    metadata: pd.DataFrame,
+    feature_matrix: torch.Tensor,
+    feature_columns: list[str] | None = None,
+) -> pd.DataFrame:
     frame = metadata.loc[:, ["split", "y", "place", "group", "img_filename", "place_filename"]].copy()
     features = feature_matrix.detach().cpu().numpy()
+    columns = feature_columns or [f"feature_{index}" for index in range(features.shape[1])]
+    if len(columns) != features.shape[1]:
+        raise ValueError("feature_columns length must match feature_matrix width.")
     feature_frame = pd.DataFrame(
         features,
-        columns=[f"feature_{index}" for index in range(features.shape[1])],
+        columns=columns,
     )
     return pd.concat([frame.reset_index(drop=True), feature_frame], axis=1)
 
@@ -457,6 +693,62 @@ def _active_erm_sample_mode(target_sample_mode: str, *, epoch_index: int, sample
     return _canonical_erm_sample_mode(target_sample_mode)
 
 
+def _waterbirds_contrastive_pair_masks(labels: torch.Tensor, envs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    labels = labels.view(-1)
+    envs = envs.view(-1)
+    if labels.shape != envs.shape:
+        raise ValueError("labels and envs must have the same shape.")
+    not_self = ~torch.eye(len(labels), dtype=torch.bool, device=labels.device)
+    same_label = labels[:, None] == labels[None, :]
+    same_env = envs[:, None] == envs[None, :]
+    positives = same_label & ~same_env & not_self
+    hard_negatives = ~same_label & same_env & not_self
+    return positives, hard_negatives
+
+
+def _cross_env_supervised_contrastive_loss(
+    features: torch.Tensor,
+    labels: torch.Tensor,
+    envs: torch.Tensor,
+    *,
+    temperature: float,
+    hard_negative_weight: float = 1.0,
+) -> torch.Tensor:
+    if temperature <= 0.0:
+        raise ValueError("erm_finetune_contrastive_temperature must be positive.")
+    if hard_negative_weight <= 0.0:
+        raise ValueError("erm_finetune_contrastive_hard_negative_weight must be positive.")
+    positives, hard_negatives = _waterbirds_contrastive_pair_masks(labels, envs)
+    valid_anchors = positives.any(dim=1)
+    if not bool(valid_anchors.any().item()):
+        return features.sum() * 0.0
+
+    embeddings = torch.nn.functional.normalize(features.float(), dim=1)
+    logits = embeddings @ embeddings.t() / float(temperature)
+    logits = logits - logits.max(dim=1, keepdim=True).values.detach()
+    not_self = ~torch.eye(len(labels), dtype=torch.bool, device=features.device)
+    denom_weights = torch.ones_like(logits)
+    if hard_negative_weight != 1.0:
+        denom_weights = torch.where(
+            hard_negatives,
+            torch.full_like(denom_weights, float(hard_negative_weight)),
+            denom_weights,
+        )
+    denom_weights = torch.where(not_self, denom_weights, torch.zeros_like(denom_weights))
+    exp_logits = torch.exp(logits)
+    denominator = (exp_logits * denom_weights).sum(dim=1).clamp_min(1e-12)
+    numerator = (exp_logits * positives.float()).sum(dim=1).clamp_min(1e-12)
+    return (-torch.log(numerator[valid_anchors] / denominator[valid_anchors])).mean()
+
+
+def _set_erm_finetune_seed(seed: int, device: torch.device) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if device.type == "cuda":
+        torch.cuda.manual_seed_all(seed)
+
+
 def _make_optimizer(
     parameters: list[torch.nn.Parameter],
     *,
@@ -504,6 +796,10 @@ def train_erm_featurizer(
     sample_mode: str = "natural",
     minority_weight: float = 1.0,
     sample_warmup_epochs: int = 0,
+    contrastive_weight: float = 0.0,
+    contrastive_temperature: float = 0.1,
+    contrastive_hard_negative_weight: float = 1.0,
+    seed: int | None = None,
     env_adv_weight: float = 0.0,
     env_adv_hidden_dim: int = 0,
     env_adv_loss_weight: float = 1.0,
@@ -515,6 +811,9 @@ def train_erm_featurizer(
     train_metadata = metadata[metadata["split"] == "train"]
     if train_metadata.empty:
         raise ValueError("Waterbirds ERM fine-tuning requires a non-empty train split.")
+    resolved_seed = None if seed is None else int(seed)
+    if resolved_seed is not None:
+        _set_erm_finetune_seed(resolved_seed, device)
     output_dim = int(metadata["y"].max()) + 1
     in_features = int(model.fc.in_features)
     model.fc = torch.nn.Linear(in_features, output_dim).to(device)
@@ -523,8 +822,20 @@ def train_erm_featurizer(
     dataset = WaterbirdsImageDataset(dataset_dir, train_metadata, transform)
     resolved_sample_mode = _canonical_erm_sample_mode(sample_mode, balance_groups=balance_groups)
     sample_warmup_epochs = int(sample_warmup_epochs)
+    contrastive_weight = float(contrastive_weight)
+    contrastive_temperature = float(contrastive_temperature)
+    contrastive_hard_negative_weight = float(contrastive_hard_negative_weight)
+    if contrastive_weight < 0.0:
+        raise ValueError("erm_finetune_contrastive_weight must be non-negative.")
+    if contrastive_weight > 0.0 and contrastive_temperature <= 0.0:
+        raise ValueError("erm_finetune_contrastive_temperature must be positive.")
+    if contrastive_weight > 0.0 and contrastive_hard_negative_weight <= 0.0:
+        raise ValueError("erm_finetune_contrastive_hard_negative_weight must be positive.")
 
-    def build_loader(active_sample_mode: str) -> DataLoader:
+    def build_loader(active_sample_mode: str, *, epoch_index: int) -> DataLoader:
+        generator = None
+        if resolved_seed is not None:
+            generator = torch.Generator().manual_seed(resolved_seed + epoch_index)
         sample_weights = _erm_finetune_sample_weights(
             train_metadata,
             sample_mode=active_sample_mode,
@@ -537,9 +848,17 @@ def train_erm_featurizer(
                 sample_weights,
                 num_samples=len(train_metadata),
                 replacement=True,
+                generator=generator,
             )
             shuffle = False
-        return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, sampler=sampler, num_workers=0)
+        return DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            sampler=sampler,
+            num_workers=0,
+            generator=generator,
+        )
 
     nuisance_head: torch.nn.Module | None = None
     if env_adv_weight > 0.0:
@@ -593,17 +912,21 @@ def train_erm_featurizer(
         if warmup_epochs > 0 and epoch_idx == warmup_epochs:
             _set_trainable_layers(model, mode)
             optimizer = build_optimizer()
+        if resolved_seed is not None:
+            _set_erm_finetune_seed(resolved_seed + epoch_idx, device)
         active_sample_mode = _active_erm_sample_mode(
             resolved_sample_mode,
             epoch_index=epoch_idx,
             sample_warmup_epochs=sample_warmup_epochs,
         )
-        loader = build_loader(active_sample_mode)
+        loader = build_loader(active_sample_mode, epoch_index=epoch_idx)
         progress_interval = max(1, len(loader) // 6)
         model.train()
         if nuisance_head is not None:
             nuisance_head.train()
         epoch_loss = 0.0
+        epoch_label_loss = 0.0
+        epoch_contrastive_loss = 0.0
         seen_examples = 0
         print(
             json.dumps(
@@ -618,6 +941,10 @@ def train_erm_featurizer(
                     "target_sample_mode": resolved_sample_mode,
                     "minority_weight": float(minority_weight),
                     "sample_warmup_epochs": sample_warmup_epochs,
+                    "contrastive_weight": contrastive_weight,
+                    "contrastive_temperature": contrastive_temperature,
+                    "contrastive_hard_negative_weight": contrastive_hard_negative_weight,
+                    "seed": resolved_seed,
                 },
                 sort_keys=True,
             ),
@@ -630,7 +957,18 @@ def train_erm_featurizer(
             batch = batch.to(device)
             features = _resnet_penultimate(model, batch)
             logits = model.fc(features)
-            loss = torch.nn.functional.cross_entropy(logits, labels)
+            label_loss = torch.nn.functional.cross_entropy(logits, labels)
+            loss = label_loss
+            contrastive_loss = features.sum() * 0.0
+            if contrastive_weight > 0.0:
+                contrastive_loss = _cross_env_supervised_contrastive_loss(
+                    features,
+                    labels,
+                    envs,
+                    temperature=contrastive_temperature,
+                    hard_negative_weight=contrastive_hard_negative_weight,
+                )
+                loss = loss + contrastive_weight * contrastive_loss
             if nuisance_head is not None:
                 nuisance_logits = nuisance_head(_grad_reverse(features, env_adv_weight))
                 loss = loss + env_adv_loss_weight * torch.nn.functional.cross_entropy(nuisance_logits, envs)
@@ -638,6 +976,8 @@ def train_erm_featurizer(
             optimizer.step()
             batch_size_seen = int(batch.shape[0])
             epoch_loss += float(loss.detach().cpu().item()) * batch_size_seen
+            epoch_label_loss += float(label_loss.detach().cpu().item()) * batch_size_seen
+            epoch_contrastive_loss += float(contrastive_loss.detach().cpu().item()) * batch_size_seen
             seen_examples += batch_size_seen
             if batch_idx == len(loader) or batch_idx % progress_interval == 0:
                 print(
@@ -650,6 +990,8 @@ def train_erm_featurizer(
                             "batch": batch_idx,
                             "batches": len(loader),
                             "mean_loss": epoch_loss / max(seen_examples, 1),
+                            "mean_label_loss": epoch_label_loss / max(seen_examples, 1),
+                            "mean_contrastive_loss": epoch_contrastive_loss / max(seen_examples, 1),
                         },
                         sort_keys=True,
                     ),
@@ -663,6 +1005,8 @@ def train_erm_featurizer(
                     "epoch": epoch_idx + 1,
                     "epochs": epochs,
                     "mean_loss": epoch_loss / max(seen_examples, 1),
+                    "mean_label_loss": epoch_label_loss / max(seen_examples, 1),
+                    "mean_contrastive_loss": epoch_contrastive_loss / max(seen_examples, 1),
                 },
                 sort_keys=True,
             ),
@@ -711,6 +1055,11 @@ def _official_erm_settings() -> dict[str, Any]:
         "erm_finetune_sample_mode": "natural",
         "erm_finetune_minority_weight": 1.0,
         "erm_finetune_sample_warmup_epochs": 0,
+        "erm_finetune_contrastive_weight": 0.0,
+        "erm_finetune_contrastive_temperature": 0.1,
+        "erm_finetune_contrastive_hard_negative_weight": 1.0,
+        "erm_finetune_seed": None,
+        "feature_decomposition": "none",
         "erm_env_adv_weight": 0.0,
         "erm_env_adv_hidden_dim": 0,
         "erm_env_adv_loss_weight": 1.0,
@@ -745,9 +1094,20 @@ def _resolve_erm_settings(
     erm_finetune_sample_mode: str = "natural",
     erm_finetune_minority_weight: float = 1.0,
     erm_finetune_sample_warmup_epochs: int = 0,
+    erm_finetune_contrastive_weight: float = 0.0,
+    erm_finetune_contrastive_temperature: float = 0.1,
+    erm_finetune_contrastive_hard_negative_weight: float = 1.0,
+    erm_finetune_seed: int | None = None,
+    feature_decomposition: str = "none",
 ) -> dict[str, Any]:
     if int(erm_finetune_sample_warmup_epochs) < 0:
         raise ValueError("erm_finetune_sample_warmup_epochs must be non-negative.")
+    if float(erm_finetune_contrastive_weight) < 0.0:
+        raise ValueError("erm_finetune_contrastive_weight must be non-negative.")
+    if float(erm_finetune_contrastive_temperature) <= 0.0:
+        raise ValueError("erm_finetune_contrastive_temperature must be positive.")
+    if float(erm_finetune_contrastive_hard_negative_weight) <= 0.0:
+        raise ValueError("erm_finetune_contrastive_hard_negative_weight must be positive.")
     settings = {
         "batch_size": int(batch_size),
         "erm_finetune_epochs": int(erm_finetune_epochs),
@@ -764,6 +1124,11 @@ def _resolve_erm_settings(
         ),
         "erm_finetune_minority_weight": float(erm_finetune_minority_weight),
         "erm_finetune_sample_warmup_epochs": int(erm_finetune_sample_warmup_epochs),
+        "erm_finetune_contrastive_weight": float(erm_finetune_contrastive_weight),
+        "erm_finetune_contrastive_temperature": float(erm_finetune_contrastive_temperature),
+        "erm_finetune_contrastive_hard_negative_weight": float(erm_finetune_contrastive_hard_negative_weight),
+        "erm_finetune_seed": None if erm_finetune_seed is None else int(erm_finetune_seed),
+        "feature_decomposition": _canonical_feature_decomposition(feature_decomposition),
         "erm_env_adv_weight": float(erm_env_adv_weight),
         "erm_env_adv_hidden_dim": int(erm_env_adv_hidden_dim),
         "erm_env_adv_loss_weight": float(erm_env_adv_loss_weight),
@@ -780,6 +1145,7 @@ def _resolve_erm_settings(
         raise ValueError("erm_finetune_preset must be empty or 'official'.")
     official = _official_erm_settings()
     settings.update(official)
+    settings["feature_decomposition"] = _canonical_feature_decomposition(feature_decomposition)
     return settings
 
 
@@ -830,7 +1196,23 @@ def extract_feature_matrix_from_model(
     *,
     device: torch.device,
     batch_size: int,
+    feature_decomposition: str = "none",
 ) -> torch.Tensor:
+    mode = _canonical_feature_decomposition(feature_decomposition)
+    if mode != "none":
+        dataset = WaterbirdsImageViewDataset(dataset_dir, metadata, transform, mode)
+        loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=0)
+        outputs: list[torch.Tensor] = []
+        model.eval()
+        with torch.inference_mode():
+            for batch, _ in loader:
+                batch = batch.to(device)
+                batch_count, view_count = int(batch.shape[0]), int(batch.shape[1])
+                flat_batch = batch.view(batch_count * view_count, *batch.shape[2:])
+                flat_features = model(flat_batch).detach().cpu()
+                view_features = flat_features.view(batch_count, view_count, -1)
+                outputs.append(_compose_decomposed_view_features(view_features, mode))
+        return torch.cat(outputs, dim=0)
     dataset = WaterbirdsImageDataset(dataset_dir, metadata, transform)
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=0)
     outputs: list[torch.Tensor] = []
@@ -858,6 +1240,10 @@ def extract_protocol_feature_matrix(
     erm_finetune_sample_mode: str = "natural",
     erm_finetune_minority_weight: float = 1.0,
     erm_finetune_sample_warmup_epochs: int = 0,
+    erm_finetune_contrastive_weight: float = 0.0,
+    erm_finetune_contrastive_temperature: float = 0.1,
+    erm_finetune_contrastive_hard_negative_weight: float = 1.0,
+    erm_finetune_seed: int | None = None,
     erm_env_adv_weight: float = 0.0,
     erm_env_adv_hidden_dim: int = 0,
     erm_env_adv_loss_weight: float = 1.0,
@@ -868,6 +1254,7 @@ def extract_protocol_feature_matrix(
     backbone_name: str = "resnet50",
     feature_extractor_suffix: str = "",
     erm_finetune_preset: str | None = None,
+    feature_decomposition: str = "none",
     training_checkpoint_path: Path | None = None,
 ) -> tuple[torch.Tensor, str, dict[str, float], dict[str, Any]]:
     settings = _resolve_erm_settings(
@@ -883,6 +1270,10 @@ def extract_protocol_feature_matrix(
         erm_finetune_sample_mode=erm_finetune_sample_mode,
         erm_finetune_minority_weight=erm_finetune_minority_weight,
         erm_finetune_sample_warmup_epochs=erm_finetune_sample_warmup_epochs,
+        erm_finetune_contrastive_weight=erm_finetune_contrastive_weight,
+        erm_finetune_contrastive_temperature=erm_finetune_contrastive_temperature,
+        erm_finetune_contrastive_hard_negative_weight=erm_finetune_contrastive_hard_negative_weight,
+        erm_finetune_seed=erm_finetune_seed,
         erm_env_adv_weight=erm_env_adv_weight,
         erm_env_adv_hidden_dim=erm_env_adv_hidden_dim,
         erm_env_adv_loss_weight=erm_env_adv_loss_weight,
@@ -892,6 +1283,7 @@ def extract_protocol_feature_matrix(
         eval_transform_style=eval_transform_style,
         feature_extractor_suffix=feature_extractor_suffix,
         erm_finetune_preset=erm_finetune_preset,
+        feature_decomposition=feature_decomposition,
     )
     backbone_key = backbone_name.strip().lower()
     if int(settings["erm_finetune_epochs"]) > 0 and backbone_key != "resnet50":
@@ -902,10 +1294,29 @@ def extract_protocol_feature_matrix(
             weights_variant=str(settings["weights_variant"]),
             eval_transform_style=str(settings["eval_transform_style"]),
         )
-    elif backbone_key in {"hf", "hf_auto", "huggingface"}:
+    elif backbone_key in {
+        "hf",
+        "hf_auto",
+        "huggingface",
+        "hf_patch_components",
+        "hf_patch",
+        "hf_patch_cls_components",
+        "hf_patch_cls",
+        "hf_patch_norm_components",
+        "hf_patch_norm",
+    }:
+        if backbone_key in {"hf_patch_components", "hf_patch"}:
+            hf_pooling = "patch_center_background"
+        elif backbone_key in {"hf_patch_cls_components", "hf_patch_cls"}:
+            hf_pooling = "patch_cls_similarity"
+        elif backbone_key in {"hf_patch_norm_components", "hf_patch_norm"}:
+            hf_pooling = "patch_token_norm"
+        else:
+            hf_pooling = "cls"
         model, transform, model_name = build_frozen_hf_vision_backbone(
             model_id=str(settings["weights_variant"]),
             local_files_only=str(settings["eval_transform_style"]).strip().lower() == "local",
+            pooling=hf_pooling,
         )
         model.to(device)
     else:
@@ -938,6 +1349,10 @@ def extract_protocol_feature_matrix(
             sample_mode=str(settings["erm_finetune_sample_mode"]),
             minority_weight=float(settings["erm_finetune_minority_weight"]),
             sample_warmup_epochs=int(settings["erm_finetune_sample_warmup_epochs"]),
+            contrastive_weight=float(settings["erm_finetune_contrastive_weight"]),
+            contrastive_temperature=float(settings["erm_finetune_contrastive_temperature"]),
+            contrastive_hard_negative_weight=float(settings["erm_finetune_contrastive_hard_negative_weight"]),
+            seed=settings["erm_finetune_seed"],
             env_adv_weight=float(settings["erm_env_adv_weight"]),
             env_adv_hidden_dim=int(settings["erm_env_adv_hidden_dim"]),
             env_adv_loss_weight=float(settings["erm_env_adv_loss_weight"]),
@@ -982,6 +1397,9 @@ def extract_protocol_feature_matrix(
         model.fc = torch.nn.Identity()
         model.eval()
         extractor_name = model_name if str(model_name).endswith("_penultimate") else f"{model_name}_penultimate"
+    decomposition_tag = _feature_decomposition_tag(str(settings["feature_decomposition"]))
+    if decomposition_tag and decomposition_tag not in extractor_name:
+        extractor_name = f"{extractor_name}{decomposition_tag}"
     return (
         extract_feature_matrix_from_model(
             model,
@@ -990,6 +1408,7 @@ def extract_protocol_feature_matrix(
             transform,
             device=device,
             batch_size=int(settings["batch_size"]),
+            feature_decomposition=str(settings["feature_decomposition"]),
         ),
         extractor_name,
         base_metrics,
@@ -1033,6 +1452,11 @@ def _load_prepared_artifact(features_csv: Path) -> PreparedWaterbirdsFeatures | 
         split_definition=str(payload.get("split_definition", "")),
         base_metrics={str(key): float(value) for key, value in dict(payload.get("base_metrics", {})).items()},
         resolved_settings=dict(payload.get("resolved_settings", {})),
+        feature_columns=[str(value) for value in payload.get("feature_columns", [])],
+        feature_components={
+            str(key): [str(item) for item in value]
+            for key, value in dict(payload.get("feature_components", {})).items()
+        },
     )
 
 
@@ -1045,6 +1469,8 @@ def _store_prepared_artifact(artifact: PreparedWaterbirdsFeatures) -> None:
                 "split_definition": artifact.split_definition,
                 "base_metrics": artifact.base_metrics,
                 "resolved_settings": artifact.resolved_settings,
+                "feature_columns": artifact.feature_columns,
+                "feature_components": artifact.feature_components,
             },
             indent=2,
             sort_keys=True,
@@ -1076,6 +1502,10 @@ def prepare_waterbirds_features_artifact(
     erm_finetune_sample_mode: str = "natural",
     erm_finetune_minority_weight: float = 1.0,
     erm_finetune_sample_warmup_epochs: int = 0,
+    erm_finetune_contrastive_weight: float = 0.0,
+    erm_finetune_contrastive_temperature: float = 0.1,
+    erm_finetune_contrastive_hard_negative_weight: float = 1.0,
+    erm_finetune_seed: int | None = None,
     erm_env_adv_weight: float = 0.0,
     erm_env_adv_hidden_dim: int = 0,
     erm_env_adv_loss_weight: float = 1.0,
@@ -1086,6 +1516,7 @@ def prepare_waterbirds_features_artifact(
     backbone_name: str = "resnet50",
     feature_extractor_suffix: str = "",
     erm_finetune_preset: str | None = None,
+    feature_decomposition: str = "none",
 ) -> PreparedWaterbirdsFeatures:
     if features_csv.exists() and not overwrite_features:
         cached = _load_prepared_artifact(features_csv)
@@ -1115,6 +1546,10 @@ def prepare_waterbirds_features_artifact(
         erm_finetune_sample_mode=erm_finetune_sample_mode,
         erm_finetune_minority_weight=erm_finetune_minority_weight,
         erm_finetune_sample_warmup_epochs=erm_finetune_sample_warmup_epochs,
+        erm_finetune_contrastive_weight=erm_finetune_contrastive_weight,
+        erm_finetune_contrastive_temperature=erm_finetune_contrastive_temperature,
+        erm_finetune_contrastive_hard_negative_weight=erm_finetune_contrastive_hard_negative_weight,
+        erm_finetune_seed=erm_finetune_seed,
         erm_env_adv_weight=erm_env_adv_weight,
         erm_env_adv_hidden_dim=erm_env_adv_hidden_dim,
         erm_env_adv_loss_weight=erm_env_adv_loss_weight,
@@ -1125,10 +1560,15 @@ def prepare_waterbirds_features_artifact(
         backbone_name=backbone_name,
         feature_extractor_suffix=feature_extractor_suffix,
         erm_finetune_preset=erm_finetune_preset,
+        feature_decomposition=feature_decomposition,
         training_checkpoint_path=training_checkpoint_path,
     )
     features_csv.parent.mkdir(parents=True, exist_ok=True)
-    feature_frame = build_feature_frame(metadata, feature_matrix)
+    feature_columns, feature_components = _feature_columns_for_components(
+        int(feature_matrix.shape[1]),
+        _feature_component_names(resolved_settings=resolved_settings, extractor_name=extractor_name),
+    )
+    feature_frame = build_feature_frame(metadata, feature_matrix, feature_columns=feature_columns)
     feature_frame.to_csv(features_csv, index=False)
     split_definition = "official Stanford Waterbirds metadata split: 0=train, 1=val, 2=test"
     feature_source = (
@@ -1151,6 +1591,8 @@ def prepare_waterbirds_features_artifact(
         split_definition=split_definition,
         base_metrics=base_metrics,
         resolved_settings=resolved_settings,
+        feature_columns=feature_columns,
+        feature_components=feature_components,
     )
     _store_prepared_artifact(artifact)
     if training_checkpoint_path.exists():
@@ -1181,6 +1623,10 @@ def prepare_waterbirds_features(
     erm_finetune_sample_mode: str = "natural",
     erm_finetune_minority_weight: float = 1.0,
     erm_finetune_sample_warmup_epochs: int = 0,
+    erm_finetune_contrastive_weight: float = 0.0,
+    erm_finetune_contrastive_temperature: float = 0.1,
+    erm_finetune_contrastive_hard_negative_weight: float = 1.0,
+    erm_finetune_seed: int | None = None,
     erm_env_adv_weight: float = 0.0,
     erm_env_adv_hidden_dim: int = 0,
     erm_env_adv_loss_weight: float = 1.0,
@@ -1191,6 +1637,7 @@ def prepare_waterbirds_features(
     backbone_name: str = "resnet50",
     feature_extractor_suffix: str = "",
     erm_finetune_preset: str | None = None,
+    feature_decomposition: str = "none",
 ) -> Path:
     artifact = prepare_waterbirds_features_artifact(
         download_dir=download_dir,
@@ -1214,6 +1661,10 @@ def prepare_waterbirds_features(
         erm_finetune_sample_mode=erm_finetune_sample_mode,
         erm_finetune_minority_weight=erm_finetune_minority_weight,
         erm_finetune_sample_warmup_epochs=erm_finetune_sample_warmup_epochs,
+        erm_finetune_contrastive_weight=erm_finetune_contrastive_weight,
+        erm_finetune_contrastive_temperature=erm_finetune_contrastive_temperature,
+        erm_finetune_contrastive_hard_negative_weight=erm_finetune_contrastive_hard_negative_weight,
+        erm_finetune_seed=erm_finetune_seed,
         erm_env_adv_weight=erm_env_adv_weight,
         erm_env_adv_hidden_dim=erm_env_adv_hidden_dim,
         erm_env_adv_loss_weight=erm_env_adv_loss_weight,
@@ -1224,6 +1675,7 @@ def prepare_waterbirds_features(
         backbone_name=backbone_name,
         feature_extractor_suffix=feature_extractor_suffix,
         erm_finetune_preset=erm_finetune_preset,
+        feature_decomposition=feature_decomposition,
     )
     return artifact.features_csv
 
@@ -1248,6 +1700,10 @@ def main() -> None:
     parser.add_argument("--erm-finetune-sample-mode", default="natural", choices=tuple(sorted(ERM_SAMPLE_MODES)))
     parser.add_argument("--erm-finetune-minority-weight", type=float, default=1.0)
     parser.add_argument("--erm-finetune-sample-warmup-epochs", type=int, default=0)
+    parser.add_argument("--erm-finetune-contrastive-weight", type=float, default=0.0)
+    parser.add_argument("--erm-finetune-contrastive-temperature", type=float, default=0.1)
+    parser.add_argument("--erm-finetune-contrastive-hard-negative-weight", type=float, default=1.0)
+    parser.add_argument("--erm-finetune-seed", type=int, default=None)
     parser.add_argument("--erm-env-adv-weight", type=float, default=0.0)
     parser.add_argument("--erm-env-adv-hidden-dim", type=int, default=0)
     parser.add_argument("--erm-env-adv-loss-weight", type=float, default=1.0)
@@ -1255,6 +1711,7 @@ def main() -> None:
     parser.add_argument("--erm-finetune-warmup-mode", choices=("head", "layer4", "all"), default="head")
     parser.add_argument("--erm-finetune-preset", choices=("official",), default=None)
     parser.add_argument("--backbone-name", default="resnet50")
+    parser.add_argument("--feature-decomposition", default="none", choices=tuple(sorted(FEATURE_DECOMPOSITION_MODES)))
     parser.add_argument("--force-download", action="store_true")
     parser.add_argument("--force-extract", action="store_true")
     parser.add_argument("--overwrite-features", action="store_true")
@@ -1282,6 +1739,10 @@ def main() -> None:
         erm_finetune_sample_mode=args.erm_finetune_sample_mode,
         erm_finetune_minority_weight=args.erm_finetune_minority_weight,
         erm_finetune_sample_warmup_epochs=args.erm_finetune_sample_warmup_epochs,
+        erm_finetune_contrastive_weight=args.erm_finetune_contrastive_weight,
+        erm_finetune_contrastive_temperature=args.erm_finetune_contrastive_temperature,
+        erm_finetune_contrastive_hard_negative_weight=args.erm_finetune_contrastive_hard_negative_weight,
+        erm_finetune_seed=args.erm_finetune_seed,
         erm_env_adv_weight=args.erm_env_adv_weight,
         erm_env_adv_hidden_dim=args.erm_env_adv_hidden_dim,
         erm_env_adv_loss_weight=args.erm_env_adv_loss_weight,
@@ -1289,6 +1750,7 @@ def main() -> None:
         erm_finetune_warmup_mode=args.erm_finetune_warmup_mode,
         erm_finetune_preset=args.erm_finetune_preset,
         backbone_name=args.backbone_name,
+        feature_decomposition=args.feature_decomposition,
     )
     print(out)
 

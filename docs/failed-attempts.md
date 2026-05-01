@@ -220,6 +220,37 @@ issues unless they invalidate an experimental result.
     mechanism changes the representation objective or feature source more
     substantially.
 
+- **Global supervised contrastive loss as an immediate upstream feature fix**
+  - Attempt: add a global cross-background supervised-contrastive loss during
+    Waterbirds ResNet feature generation, with same-label/different-background
+    positives and same-background/different-label hard negatives, then evaluate
+    exported penultimate features through unchanged official DFR.
+  - Result: seeded limit384 e5/LR `0.001` diagnostics at contrastive
+    `w=0.05,t=0.2` and `w=0.2,t=0.15` both matched the seeded no-contrastive
+    control at official DFR test WGA `0.71875`. The feature matrices moved
+    measurably, but base WGA and downstream DFR metrics did not improve.
+  - Interpretation: global label-level contrast is too coarse for the current
+    Waterbirds representation problem; it may align birds across backgrounds,
+    but it does not expose a better DFR-ready bird/background factorization.
+  - Action: keep the implementation and seed control as infrastructure, but do
+    not launch full runs for these global supervised-contrastive settings. Move
+    next to patch/object/component decomposition before applying DFR or clue
+    priors.
+
+- **Fixed DINO patch center/background pooling as a full benchmark candidate**
+  - Attempt: use frozen local DINOv2-small patch tokens pooled into CLS,
+    center-patch, corner-background, and center-minus-background components,
+    then evaluate through unchanged `official_dfr_val_tr_retrains50`.
+  - Result: the limit384 diagnostic was encouraging at `0.875` official DFR
+    test WGA, but the no-limit seed101 run reached only
+    `0.9112149477005005` test WGA and `0.9368311762809753` accuracy.
+  - Interpretation: fixed center/corner patch pooling is too crude to beat the
+    official full-data comparator even though it improves the small diagnostic
+    slice.
+  - Action: do not promote this exact patch-component recipe. Keep DINO
+    decomposition as a direction, but use a better component selector or an
+    efficient crop/object extraction path before spending seed-sweep compute.
+
 - **Fixture-level ceiling as evidence of SOTA**
   - Attempt: compose counterfactual augmentation with adversarial probe training
     and evaluate first on the Waterbirds-style fixture.
