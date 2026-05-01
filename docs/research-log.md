@@ -879,3 +879,21 @@ signals. Keep this focused on what was tried and what was learned.
   which LLM-proposed probe actions are useful. This remains fixture-safe
   infrastructure; Waterbirds use should begin with diagnostics and controls,
   not downstream promotion.
+
+## 2026-05-01: LLM-Tested Clues vs Fixture Baselines
+
+- Ran the mock LLM-tested clue probe across all eight lightweight fixture
+  configs with `--card-top-k 8 --max-packets 8`, writing artifacts under
+  `outputs/dfr_sweeps/llm_clue_fixture_experiments/`.
+- Compared top-k known causal-target recovery for `llm_tested`, stats, and
+  deterministic random score sources. Aggregate top-1 mean causal target was
+  `0.625` for `llm_tested`, `1.000` for stats, and `0.000` for random. At
+  top-2 it was `0.3125` for `llm_tested`, `0.6875` for stats, and `0.125` for
+  random.
+- Interpretation: the tested LLM loop is already above random but still below
+  the simple stats baseline. It succeeds on the simple tabular and
+  Waterbirds-style fixtures, but misses several factor/sequence fixtures by
+  chasing high observed effect/correlation features instead of the known latent
+  cause. Those misses are useful training examples for the bridge ranker: it
+  needs to learn when a tested feature effect is shortcut/artifact evidence
+  rather than causal support.

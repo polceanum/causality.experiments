@@ -185,8 +185,26 @@ def test_llm_counterfactual_clue_probe_runner_writes_replayable_artifacts(tmp_pa
         max_packets=3,
     )
 
-    for key in ("cards", "latent_clue_packets", "hypotheses", "test_specs", "test_results", "training_traces", "llm_clues", "manifest"):
+    for key in (
+        "cards",
+        "feature_clues",
+        "latent_clue_packets",
+        "hypotheses",
+        "test_specs",
+        "test_results",
+        "training_traces",
+        "llm_clues",
+        "scores_llm_tested",
+        "scores_stats",
+        "scores_random",
+        "baseline_comparison",
+        "manifest",
+    ):
         assert Path(manifest[key]).exists()
     assert Path(manifest["latent_clue_packets"]).read_text(encoding="utf-8").strip()
     assert Path(manifest["training_traces"]).read_text(encoding="utf-8").strip()
     assert "test_passed_control" in Path(manifest["llm_clues"]).read_text(encoding="utf-8")
+    comparison = Path(manifest["baseline_comparison"]).read_text(encoding="utf-8")
+    assert "llm_tested" in comparison
+    assert "stats" in comparison
+    assert "random" in comparison

@@ -507,6 +507,15 @@ goal, not incidental development mechanics.
   tested clue rows, and training traces. Real LLM/replay backends and a held-out
   bridge-ranker evaluator are the next implementation layer before any
   Waterbirds downstream claim.
+- First fixture comparison for the LLM-tested bridge is complete. Across all
+  eight lightweight fixture configs, `llm_tested` top-1 known causal-target
+  recovery averaged `0.625`, versus `1.000` for the stats baseline and `0.000`
+  for deterministic random; top-2 averaged `0.3125`, versus `0.6875` stats and
+  `0.125` random. This means the current mock-tested loop is extracting
+  non-random information, but the simple stats baseline is still stronger. The
+  misses concentrate on factor/sequence fixtures where high observed effects or
+  correlations can be shortcut/artifact clues rather than latent causes, making
+  them good bridge-ranker training data.
 - On official Waterbirds repro features, deterministic language clues now
   provide non-neutral weak evidence from activation alignment rather than
   feature names. Language-only top-k sets differ substantially from stats-only

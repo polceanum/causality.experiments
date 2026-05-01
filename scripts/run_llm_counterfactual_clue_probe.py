@@ -15,6 +15,7 @@ from causality_experiments.clues import build_feature_cards, write_csv_rows
 from causality_experiments.config import load_config
 from causality_experiments.counterfactual_clue_tests import clue_rows_from_test_results, execute_clue_tests
 from causality_experiments.data import load_dataset
+from causality_experiments.discovery import build_feature_clue_rows
 from causality_experiments.latent_clue_packets import build_latent_clue_packets, packets_to_jsonl
 from causality_experiments.llm_clue_bridge import build_bridge_training_rows
 from causality_experiments.llm_clue_planner import MockCluePlannerBackend, plan_from_backend
@@ -45,6 +46,66 @@ def _hypothesis_clue_rows(hypotheses: list[dict[str, Any]]) -> list[dict[str, An
     return rows
 
 
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    if value in (None, ""):
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _score_rows_from_clues(rows: list[dict[str, Any]], *, source: str) -> list[dict[str, str]]:
+    output: list[dict[str, str]] = []
+    for row in rows:
+        if source == "stats":
+            score = _safe_float(row.get("soft_causal_target"), _safe_float(row.get("corr_margin")))
+        elif source == "random":
+            feature_index = int(_safe_float(row.get("feature_index")))
+            score = ((feature_index * 1103515245 + 12345) % 1000000) / 1000000.0
+        elif source == "llm_tested":
+            passed = str(row.get("test_passed_control", "0")).strip().lower() in {"1", "true", "yes"}
+            score = _safe_float(row.get("llm_confidence")) if passed else 0.0
+        else:
+            raise ValueError(f"Unknown score source {source!r}.")
+        output.append(
+            {
+                "dataset": str(row.get("dataset", "")),
+                "feature_index": str(row.get("feature_index", "")),
+                "feature_name": str(row.get("feature_name", "")),
+                "support_score": f"{score:.6f}",
+                "rank_score": f"{score:.6f}",
+                "score": f"{score:.6f}",
+                "score_source": source,
+            }
+        )
+    return output
+
+
+def _compare_score_rows(feature_clues: list[dict[str, Any]], score_sets: dict[str, list[dict[str, str]]], top_k_values: list[int]) -> list[dict[str, str]]:
+    clues_by_name = {str(row.get("feature_name", "")): row for row in feature_clues}
+    rows: list[dict[str, str]] = []
+    for label, scores in score_sets.items():
+        ranked = sorted(scores, key=lambda row: _safe_float(row.get("score")), reverse=True)
+        for top_k in top_k_values:
+            selected = [row for row in ranked if str(row.get("feature_name", "")) in clues_by_name][:top_k]
+            if not selected:
+                continue
+            joined = [clues_by_name[str(row["feature_name"])] for row in selected]
+            causal_values = [_safe_float(row.get("causal_target"), 0.0) for row in joined]
+            corr_margins = [_safe_float(row.get("corr_margin"), 0.0) for row in joined]
+            rows.append(
+                {
+                    "label": label,
+                    "top_k": str(len(selected)),
+                    "mean_causal_target": f"{sum(causal_values) / max(len(causal_values), 1):.6f}",
+                    "mean_corr_margin": f"{sum(corr_margins) / max(len(corr_margins), 1):.6f}",
+                    "selected_features": ";".join(str(row["feature_name"]) for row in selected),
+                }
+            )
+    return rows
+
+
 def run_llm_counterfactual_clue_probe(
     *,
     config_path: Path,
@@ -63,6 +124,7 @@ def run_llm_counterfactual_clue_probe(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     cards = build_feature_cards(bundle, split_name=split, top_k=card_top_k)
+    feature_clues = build_feature_clue_rows(bundle, split_name=split)
     packets = build_latent_clue_packets(bundle, split_name=split, top_k=card_top_k, max_packets=max_packets)
     plan = plan_from_backend(packets, MockCluePlannerBackend(), max_packets=max_packets)
     hypotheses = [asdict(hypothesis) for hypothesis in plan.hypotheses]
@@ -73,17 +135,32 @@ def run_llm_counterfactual_clue_probe(
         test_results = execute_clue_tests(bundle, plan.tests, packets=packets, model=model, split_name=test_split)
     trace_rows = build_bridge_training_rows(packets, plan.hypotheses, plan.tests, test_results)
     clue_rows = clue_rows_from_test_results(test_results) if test_results else _hypothesis_clue_rows(hypotheses)
+    llm_score_rows = _score_rows_from_clues(clue_rows, source="llm_tested")
+    stats_score_rows = _score_rows_from_clues(feature_clues, source="stats")
+    random_score_rows = _score_rows_from_clues(feature_clues, source="random")
+    top_k_values = sorted({1, min(2, max(1, bundle.input_dim)), min(4, max(1, bundle.input_dim))})
+    comparison_rows = _compare_score_rows(
+        feature_clues,
+        {"llm_tested": llm_score_rows, "stats": stats_score_rows, "random": random_score_rows},
+        top_k_values=top_k_values,
+    )
 
     cards_path = out_dir / "feature_cards.csv"
+    feature_clues_path = out_dir / "feature_clues.csv"
     packets_path = out_dir / "latent_clue_packets.jsonl"
     hypotheses_path = out_dir / "hypotheses.jsonl"
     tests_path = out_dir / "test_specs.jsonl"
     results_path = out_dir / "test_results.csv"
     traces_path = out_dir / "training_traces.jsonl"
     clues_path = out_dir / "llm_clues.csv"
+    llm_scores_path = out_dir / "scores_llm_tested.csv"
+    stats_scores_path = out_dir / "scores_stats.csv"
+    random_scores_path = out_dir / "scores_random.csv"
+    comparison_path = out_dir / "baseline_comparison.csv"
     manifest_path = out_dir / "manifest.json"
 
     write_csv_rows(cards_path, cards)
+    write_csv_rows(feature_clues_path, feature_clues)
     packets_path.write_text(packets_to_jsonl(packets), encoding="utf-8")
     _write_jsonl(hypotheses_path, hypotheses)
     _write_jsonl(tests_path, tests)
@@ -91,6 +168,10 @@ def run_llm_counterfactual_clue_probe(
         write_csv_rows(results_path, test_results)
     _write_jsonl(traces_path, trace_rows)
     write_csv_rows(clues_path, clue_rows)
+    write_csv_rows(llm_scores_path, llm_score_rows)
+    write_csv_rows(stats_scores_path, stats_score_rows)
+    write_csv_rows(random_scores_path, random_score_rows)
+    write_csv_rows(comparison_path, comparison_rows)
     manifest = {
         "config": str(config_path),
         "dataset": bundle.name,
@@ -103,12 +184,17 @@ def run_llm_counterfactual_clue_probe(
         "execute_tests": bool(execute_tests),
         "test_split": test_split,
         "cards": str(cards_path),
+        "feature_clues": str(feature_clues_path),
         "latent_clue_packets": str(packets_path),
         "hypotheses": str(hypotheses_path),
         "test_specs": str(tests_path),
         "test_results": str(results_path) if test_results else "",
         "training_traces": str(traces_path),
         "llm_clues": str(clues_path),
+        "scores_llm_tested": str(llm_scores_path),
+        "scores_stats": str(stats_scores_path),
+        "scores_random": str(random_scores_path),
+        "baseline_comparison": str(comparison_path),
     }
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
     manifest["manifest"] = str(manifest_path)

@@ -173,7 +173,15 @@ class MockCluePlannerBackend:
 
     def complete(self, prompt: str) -> str:
         payload = json.loads(prompt)
-        packets = payload.get("packets", [])
+        packets = sorted(
+            payload.get("packets", []),
+            key=lambda packet: (
+                _safe_float(packet.get("label_corr")) - _safe_float(packet.get("env_corr")),
+                abs(_safe_float(packet.get("corr_margin"))),
+                -_safe_float(packet.get("uncertainty")),
+            ),
+            reverse=True,
+        )
         hypotheses: list[dict[str, Any]] = []
         tests: list[dict[str, Any]] = []
         for packet in packets[:3]:
