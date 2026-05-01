@@ -842,3 +842,43 @@ signals. Keep this focused on what was tried and what was learned.
   intervention reporting: compare top CLS-sim patches against random patches,
   background-like patches, donor replacements, and prototype replacements, then
   convert only intervention effects that beat controls into discovery scores.
+
+## 2026-05-01: Active Patch Flip Probe
+
+- Added a trainable latent patch-probing path. `PatchFlipProbe` scores each
+  patch token from patch, CLS context, and patch-CLS interaction features. The
+  probe is trained with the frozen DINO hidden states and frozen official-DFR
+  head held fixed: it edits selected patch tokens, rebuilds the pooled patch
+  component features, and optimizes the edited logits toward the opposite
+  current model decision. A budget-matching loss initializes and keeps the soft
+  mask near the requested patch budget so the probe learns a small edit policy
+  instead of collapsing to no edit.
+- Added `scripts/report_waterbirds_patch_flip_probe.py`, which extracts DINO
+  hidden states, fits the official validation-split DFR head on pooled patch
+  components, trains the active probe on the train split, and reports test-set
+  counterfactual effects for learned-probe, CLS-top, CLS-bottom, token-norm,
+  and random patch masks at matched top-k.
+- Limit96 smoke: with CLS-similarity pooling, 10% patch budget, mean
+  replacement, and 12 probe epochs, the learned probe reduced the frozen head's
+  decision logit more than passive controls (`0.158` mean decision-logit drop
+  versus `0.100` for CLS-top and `0.079` random), while keeping the same
+  single-example flip rate as CLS-top.
+- Limit384 diagnostic with CLS-similarity pooling, 10% patch budget, seed `101`,
+  10 DFR retrains, and 20 probe epochs:
+  - Mean replacement: learned probe decision-logit drop `0.243`, CLS-top
+    `0.223`, token-norm `0.147`, random `0.133`. Learned and CLS-top both had
+    decision flip rate `0.0078125`.
+  - Zero replacement: learned probe decision-logit drop `0.269`, CLS-top
+    `0.239`, token-norm `0.110`, random `0.087`. CLS-top had a slightly higher
+    flip rate (`0.0234375`) than the learned probe (`0.015625`), but the learned
+    mask produced the largest average decision-logit effect.
+- Interpretation: actively training the latent counterfactual probe works as a
+  probing mechanism: it learns patch masks that are more decision-sensitive than
+  hand-coded selectors at matched sparsity. It is not yet a benchmark
+  intervention, because flip rates and WGA/accuracy movement remain small on
+  the diagnostic slice. The next step is to convert learned-probe evidence into
+  component or feature-level discovery scores and test whether those scores
+  improve downstream feature selection, rather than treating the patch edit
+  itself as the final method.
+- Verification: focused patch/report/feature tests passed with `32 passed`; the
+  full regression suite passed with `151 passed`.

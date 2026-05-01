@@ -435,9 +435,16 @@ goal, not incidental development mechanics.
   stayed at `0.875`; fused clues selected a meaningfully different support from
   stats-only top-k, but the downstream shrink search mostly chose scale `1.0`,
   so the current soft-shrink consumer is effectively falling back to plain DFR.
-  Next empirical work should produce direct intervention reports against
-  random/donor/prototype controls rather than scaling these selector-pooling
-  recipes to full no-limit runs.
+  The first active latent-probe report is now implemented in
+  `scripts/report_waterbirds_patch_flip_probe.py`. It trains a sparse patch
+  selector to flip the frozen DFR head's decision after patch-token replacement,
+  then compares the learned mask with CLS-similarity, bottom-patch, token-norm,
+  and random controls. On the limit384 CLS-pooling diagnostic with a 10% patch
+  budget, the learned mask produced the largest decision-logit drop under both
+  mean replacement (`0.243` versus `0.223` for CLS-top and `0.133` random) and
+  zero replacement (`0.269` versus `0.239` for CLS-top and `0.087` random), but
+  flip-rate and accuracy movement remained small. This validates active probing
+  as an evidence generator, not yet a benchmark-improving intervention.
 - The first new Track A configs are:
   - `waterbirds_features_official_adv_representation_dfr_score_gate`
   - `waterbirds_features_official_adv_representation_dfr_nuisance_regularized`

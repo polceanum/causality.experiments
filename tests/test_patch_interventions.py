@@ -2,11 +2,16 @@ import torch
 import pytest
 
 from causality_experiments.patch_interventions import (
+    PatchFlipProbe,
+    counterfactual_probe_loss,
+    flipped_binary_targets,
     intervention_discovery_score,
     patch_selector_scores,
     patch_tokens_from_hidden,
     replace_hidden_patch_tokens,
+    replace_hidden_patch_tokens_soft,
     replace_patch_tokens,
+    soft_patch_mask,
     summarize_counterfactual_effects,
     topk_patch_mask,
 )
@@ -75,3 +80,45 @@ def test_intervention_discovery_score_rewards_label_specific_effects() -> None:
 
     assert causal > nuisance
     assert causal > 0.5
+
+
+def test_patch_flip_probe_scores_each_patch() -> None:
+    probe = PatchFlipProbe(token_dim=2, hidden_dim=4)
+    hidden = torch.randn(3, 5, 2)
+
+    scores = probe(hidden)
+
+    assert scores.shape == (3, 4)
+
+
+def test_patch_flip_probe_can_initialize_to_mask_budget() -> None:
+    probe = PatchFlipProbe(token_dim=2, initial_mask_probability=0.1)
+    hidden = torch.randn(3, 5, 2)
+
+    mask = soft_patch_mask(probe(hidden))
+
+    assert float(mask.mean().item()) == pytest.approx(0.1)
+
+
+def test_soft_patch_replacement_interpolates_patch_values() -> None:
+    hidden = torch.tensor([[[10.0, 10.0], [1.0, 1.0], [3.0, 3.0]]])
+    weights = torch.tensor([[0.0, 0.5]])
+
+    edited = replace_hidden_patch_tokens_soft(hidden, weights, replacement="mean")
+
+    assert edited[:, :1].tolist() == [[[10.0, 10.0]]]
+    assert edited[:, 1:].tolist() == [[[1.0, 1.0], [2.5, 2.5]]]
+
+
+def test_counterfactual_probe_loss_uses_flipped_predictions_and_mask_penalty() -> None:
+    baseline = torch.tensor([[0.0, 2.0], [3.0, 0.0]])
+    edited = torch.tensor([[2.0, 0.0], [0.0, 3.0]])
+    mask_logits = torch.tensor([[2.0, -2.0], [0.0, 0.0]])
+    mask = soft_patch_mask(mask_logits, temperature=1.0)
+
+    targets = flipped_binary_targets(baseline, mode="prediction")
+    loss, parts = counterfactual_probe_loss(edited, targets, mask, sparsity_weight=0.5, budget=0.25, budget_weight=1.0)
+
+    assert targets.tolist() == [0, 1]
+    assert loss.item() > parts["flip_loss"]
+    assert parts["sparsity_loss"] == pytest.approx(float(mask.mean().item()))

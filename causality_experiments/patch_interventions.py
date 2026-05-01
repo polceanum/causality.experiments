@@ -1,8 +1,37 @@
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import torch
+from torch.nn import functional as F
+
+
+class PatchFlipProbe(torch.nn.Module):
+    def __init__(self, token_dim: int, *, hidden_dim: int = 0, initial_mask_probability: float | None = None) -> None:
+        super().__init__()
+        input_dim = int(token_dim) * 3
+        if hidden_dim > 0:
+            self.scorer = torch.nn.Sequential(
+                torch.nn.Linear(input_dim, int(hidden_dim)),
+                torch.nn.ReLU(),
+                torch.nn.Linear(int(hidden_dim), 1),
+            )
+        else:
+            self.scorer = torch.nn.Linear(input_dim, 1)
+        if initial_mask_probability is not None:
+            probability = min(max(float(initial_mask_probability), 1e-4), 1.0 - 1e-4)
+            final = self.scorer[-1] if isinstance(self.scorer, torch.nn.Sequential) else self.scorer
+            torch.nn.init.zeros_(final.weight)
+            torch.nn.init.constant_(final.bias, math.log(probability / (1.0 - probability)))
+
+    def forward(self, hidden: torch.Tensor) -> torch.Tensor:
+        cls_features = hidden[:, 0]
+        patches = patch_tokens_from_hidden(hidden)
+        cls_context = cls_features[:, None, :].expand_as(patches)
+        interactions = patches * cls_context
+        features = torch.cat([patches, cls_context, interactions], dim=2)
+        return self.scorer(features).squeeze(-1)
 
 
 def patch_tokens_from_hidden(hidden: torch.Tensor) -> torch.Tensor:
@@ -24,6 +53,14 @@ def topk_patch_mask(scores: torch.Tensor, *, top_k: int | None = None, fraction:
     indices = torch.topk(scores, k=count, dim=1, largest=largest).indices
     mask = torch.zeros_like(scores, dtype=torch.bool)
     return mask.scatter(1, indices, True)
+
+
+def soft_patch_mask(mask_logits: torch.Tensor, *, temperature: float = 1.0) -> torch.Tensor:
+    if mask_logits.ndim != 2:
+        raise ValueError("mask_logits must have shape [batch, patches].")
+    if temperature <= 0.0:
+        raise ValueError("temperature must be positive.")
+    return torch.sigmoid(mask_logits / float(temperature))
 
 
 def patch_selector_scores(hidden: torch.Tensor, selector: str) -> torch.Tensor:
@@ -67,6 +104,37 @@ def replace_patch_tokens(
     return torch.where(mask.unsqueeze(-1), values, patches)
 
 
+def replace_patch_tokens_soft(
+    patches: torch.Tensor,
+    mask_weights: torch.Tensor,
+    *,
+    replacement: str,
+    donor_patches: torch.Tensor | None = None,
+    prototype: torch.Tensor | None = None,
+) -> torch.Tensor:
+    if patches.ndim != 3:
+        raise ValueError("patches must have shape [batch, patches, dim].")
+    if mask_weights.shape != patches.shape[:2]:
+        raise ValueError("mask_weights must match the first two patch dimensions.")
+    key = replacement.strip().lower().replace("-", "_")
+    if key == "zero":
+        values = torch.zeros_like(patches)
+    elif key in {"mean", "batch_mean"}:
+        values = patches.mean(dim=1, keepdim=True).expand_as(patches)
+    elif key == "donor":
+        if donor_patches is None or donor_patches.shape != patches.shape:
+            raise ValueError("donor replacement requires donor_patches with the same shape as patches.")
+        values = donor_patches.to(device=patches.device, dtype=patches.dtype)
+    elif key in {"prototype", "centroid"}:
+        if prototype is None:
+            raise ValueError("prototype replacement requires a prototype tensor.")
+        values = _prototype_values(prototype.to(device=patches.device, dtype=patches.dtype), patches)
+    else:
+        raise ValueError("replacement must be one of: zero, mean, donor, prototype.")
+    weights = mask_weights.to(device=patches.device, dtype=patches.dtype).clamp(0.0, 1.0).unsqueeze(-1)
+    return patches * (1.0 - weights) + values * weights
+
+
 def _prototype_values(prototype: torch.Tensor, patches: torch.Tensor) -> torch.Tensor:
     if prototype.ndim == 1:
         return prototype.view(1, 1, -1).expand_as(patches)
@@ -96,6 +164,75 @@ def replace_hidden_patch_tokens(
         prototype=prototype,
     )
     return torch.cat([hidden[:, :1], edited_patches], dim=1)
+
+
+def replace_hidden_patch_tokens_soft(
+    hidden: torch.Tensor,
+    mask_weights: torch.Tensor,
+    *,
+    replacement: str,
+    donor_hidden: torch.Tensor | None = None,
+    prototype: torch.Tensor | None = None,
+) -> torch.Tensor:
+    donor_patches = None if donor_hidden is None else patch_tokens_from_hidden(donor_hidden)
+    edited_patches = replace_patch_tokens_soft(
+        patch_tokens_from_hidden(hidden),
+        mask_weights,
+        replacement=replacement,
+        donor_patches=donor_patches,
+        prototype=prototype,
+    )
+    return torch.cat([hidden[:, :1], edited_patches], dim=1)
+
+
+def flipped_binary_targets(logits: torch.Tensor, labels: torch.Tensor | None = None, *, mode: str = "prediction") -> torch.Tensor:
+    if logits.ndim != 2 or logits.shape[1] != 2:
+        raise ValueError("flipped_binary_targets currently requires binary logits with shape [batch, 2].")
+    key = mode.strip().lower().replace("-", "_")
+    if key in {"prediction", "opposite_prediction", "decision"}:
+        source = logits.detach().argmax(dim=1)
+    elif key in {"label", "opposite_label", "target"}:
+        if labels is None:
+            raise ValueError("label target mode requires labels.")
+        source = labels.detach().to(device=logits.device, dtype=torch.long).view(-1)
+    else:
+        raise ValueError("target mode must be one of: prediction, label.")
+    if source.shape[0] != logits.shape[0]:
+        raise ValueError("labels must have one entry per logit row.")
+    return 1 - source
+
+
+def counterfactual_probe_loss(
+    edited_logits: torch.Tensor,
+    flip_targets: torch.Tensor,
+    mask_weights: torch.Tensor,
+    *,
+    sparsity_weight: float = 0.0,
+    budget: float | None = None,
+    budget_weight: float = 0.0,
+    entropy_weight: float = 0.0,
+) -> tuple[torch.Tensor, dict[str, float]]:
+    targets = flip_targets.to(device=edited_logits.device, dtype=torch.long).view(-1)
+    if targets.shape[0] != edited_logits.shape[0]:
+        raise ValueError("flip_targets must have one entry per logit row.")
+    weights = mask_weights.float().clamp(1e-6, 1.0 - 1e-6)
+    flip_loss = F.cross_entropy(edited_logits, targets)
+    sparsity_loss = weights.mean()
+    loss = flip_loss + float(sparsity_weight) * sparsity_loss
+    budget_loss = weights.new_tensor(0.0)
+    if budget is not None and budget_weight > 0.0:
+        budget_loss = (sparsity_loss - float(budget)).pow(2)
+        loss = loss + float(budget_weight) * budget_loss
+    entropy_loss = -(weights * weights.log() + (1.0 - weights) * (1.0 - weights).log()).mean()
+    if entropy_weight > 0.0:
+        loss = loss + float(entropy_weight) * entropy_loss
+    return loss, {
+        "flip_loss": float(flip_loss.detach().cpu().item()),
+        "sparsity_loss": float(sparsity_loss.detach().cpu().item()),
+        "budget_loss": float(budget_loss.detach().cpu().item()),
+        "entropy_loss": float(entropy_loss.detach().cpu().item()),
+        "loss": float(loss.detach().cpu().item()),
+    }
 
 
 def target_logit_delta(baseline_logits: torch.Tensor, edited_logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
