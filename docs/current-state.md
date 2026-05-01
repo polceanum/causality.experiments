@@ -455,7 +455,18 @@ goal, not incidental development mechanics.
   additive CLS prior did not improve the probe (`0.236`-`0.239` decision-logit
   drop versus `0.246` prior-free), so the more promising adaptation is a
   multi-hypothesis/uncertainty-aware posterior over masks rather than a single
-  prior-biased mask head.
+  prior-biased mask head. That follow-up is now implemented with
+  `--probe-components`: the runner trains a mixture of patch-mask hypotheses
+  with mixture entropy and diversity regularization, then reports posterior
+  marginal, MAP-component, validation-selected, and per-example effect-selected
+  masks. On the same limit384 setup, the effect-selected 4-component mixture
+  improved mean replacement decision-logit drop to `0.267` versus `0.246` for
+  the single learned mask and `0.223` for CLS-top. Under zero replacement it
+  improved to `0.290` versus `0.269` for the single learned mask and `0.239` for
+  CLS-top, with decision flip rate `0.0234375`. The stronger mixture-effect
+  feature score still tied random in the existing soft-score causal DFR consumer
+  (`0.90625` test WGA), so this is a better mechanism diagnostic rather than a
+  downstream benchmark improvement yet.
 - The first new Track A configs are:
   - `waterbirds_features_official_adv_representation_dfr_score_gate`
   - `waterbirds_features_official_adv_representation_dfr_nuisance_regularized`

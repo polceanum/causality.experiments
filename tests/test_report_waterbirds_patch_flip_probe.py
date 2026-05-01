@@ -3,6 +3,7 @@ import torch
 from causality_experiments.methods import OfficialDFRClassifier
 from scripts.report_waterbirds_patch_flip_probe import (
     HiddenBundle,
+    PatchFlipMixtureProbe,
     adapted_probe_logits,
     build_component_feature_rows,
     build_component_bundle,
@@ -11,6 +12,8 @@ from scripts.report_waterbirds_patch_flip_probe import (
     compact_official_details,
     component_feature_names,
     evaluate_intervention_strategy,
+    mixture_component_diversity_loss,
+    mixture_mask_scores,
     normalized_patch_prior_scores,
 )
 from causality_experiments.patch_interventions import PatchFlipProbe
@@ -86,6 +89,33 @@ def test_adapted_probe_logits_can_use_patch_prior() -> None:
     assert logits.argmax(dim=1).tolist() == [0]
 
 
+def test_mixture_probe_emits_posterior_mask_scores() -> None:
+    hidden = torch.randn(3, 5, 2)
+    probe = PatchFlipMixtureProbe(token_dim=2, component_count=3, hidden_dim=4, initial_mask_probability=0.2)
+
+    mask_logits, component_logits = probe(hidden)
+    marginal_scores = mixture_mask_scores(
+        probe,
+        hidden,
+        mode="marginal",
+        prior_selector="none",
+        prior_weight=0.0,
+        budget=0.2,
+    )
+
+    assert mask_logits.shape == (3, 3, 4)
+    assert component_logits.shape == (3, 3)
+    assert marginal_scores.shape == (3, 4)
+    assert torch.all((marginal_scores >= 0.0) & (marginal_scores <= 1.0))
+
+
+def test_mixture_component_diversity_penalizes_overlap() -> None:
+    identical = torch.tensor([[[1.0, 0.0], [1.0, 0.0]]])
+    different = torch.tensor([[[1.0, 0.0], [0.0, 1.0]]])
+
+    assert mixture_component_diversity_loss(identical).item() > mixture_component_diversity_loss(different).item()
+
+
 def test_evaluate_intervention_strategy_reports_flat_group_metrics() -> None:
     hidden = torch.tensor(
         [
@@ -117,6 +147,59 @@ def test_evaluate_intervention_strategy_reports_flat_group_metrics() -> None:
     assert "label_group_mean_target_logit_delta_group_0" in row
     assert "decision_group_mean_target_logit_delta_group_3" in row
     assert compact_official_details(classifier) == {"official_dfr_best_c": 0.7}
+
+
+def test_evaluate_intervention_strategy_accepts_mixture_component() -> None:
+    hidden = torch.randn(2, 5, 2)
+    classifier = OfficialDFRClassifier(
+        weight=torch.tensor([[0.0] * 8, [1.0, 0.0, 0.5, 0.0, -0.5, 0.0, 0.25, 0.0]]),
+        bias=torch.zeros(2),
+        output_dim=2,
+    )
+    probe = PatchFlipMixtureProbe(token_dim=2, component_count=2, hidden_dim=4, initial_mask_probability=0.25)
+
+    row = evaluate_intervention_strategy(
+        strategy="mixture_val_best_component",
+        hidden=hidden,
+        labels=torch.tensor([1, 0]),
+        groups=torch.tensor([0, 3]),
+        classifier=classifier,
+        pooling="cls_similarity",
+        top_k=1,
+        replacement="zero",
+        probe=probe,
+        mixture_component_index=1,
+    )
+
+    assert row["strategy"] == "mixture_val_best_component"
+    assert row["mixture_component_index"] == 1
+    assert row["mean_mask_fraction"] == 0.25
+
+
+def test_evaluate_intervention_strategy_can_select_best_effect_component() -> None:
+    hidden = torch.randn(2, 5, 2)
+    classifier = OfficialDFRClassifier(
+        weight=torch.tensor([[0.0] * 8, [1.0, 0.0, 0.5, 0.0, -0.5, 0.0, 0.25, 0.0]]),
+        bias=torch.zeros(2),
+        output_dim=2,
+    )
+    probe = PatchFlipMixtureProbe(token_dim=2, component_count=2, hidden_dim=4, initial_mask_probability=0.25)
+
+    row = evaluate_intervention_strategy(
+        strategy="mixture_effect_best_component",
+        hidden=hidden,
+        labels=torch.tensor([1, 0]),
+        groups=torch.tensor([0, 3]),
+        classifier=classifier,
+        pooling="cls_similarity",
+        top_k=1,
+        replacement="zero",
+        probe=probe,
+    )
+
+    assert row["strategy"] == "mixture_effect_best_component"
+    assert "mean_mixture_component_index" in row
+    assert row["mean_mask_fraction"] == 0.25
 
 
 def test_build_intervention_feature_score_rows_emits_discovery_schema() -> None:

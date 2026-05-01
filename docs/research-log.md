@@ -916,3 +916,41 @@ signals. Keep this focused on what was tried and what was learned.
   weights/uncertainty and diversity, then select by posterior marginal or
   risk-adjusted expected effect. That would better match the paper's
   distribution-to-distribution update than a scalar prior bias.
+
+## 2026-05-01: Multi-Hypothesis Patch Posterior
+
+- Implemented the paper-inspired posterior-over-masks variant in
+  `scripts/report_waterbirds_patch_flip_probe.py`. `--probe-components K` now
+  trains a `PatchFlipMixtureProbe`: K independent patch-mask hypotheses plus a
+  learned mixture-weight head. The training loss uses a mixture negative
+  log-likelihood for the flipped-decision target, the existing budget penalty,
+  mask entropy hardening, mixture-entropy reward, and pairwise mask-diversity
+  penalty.
+- The report now evaluates four learned posterior decision rules when K > 1:
+  posterior marginal top-k, MAP-component top-k, validation-selected component,
+  and a per-example effect-selected component that chooses the component with
+  the largest expected drop in the frozen model's current decision logit. The
+  last rule is label-free but uses the frozen head as its own intervention
+  scorer.
+- Limit384, CLS-similarity pooling, 10% patch budget, 4 components, mean
+  replacement: effect-selected mixture produced decision-logit drop `0.267`,
+  improving over the prior-free single learned mask at `0.246`, validation-best
+  mixture component at `0.243`, MAP component at `0.237`, marginal at `0.215`,
+  CLS-top at `0.223`, and random at `0.139`. Flip rate remained `0.0078125`.
+- Limit384 with zero replacement: effect-selected mixture produced
+  decision-logit drop `0.290`, improving over the prior-free single learned mask
+  at `0.269`, validation-best mixture component at `0.277`, MAP component at
+  `0.264`, CLS-top at `0.239`, and random at `0.094`. Decision flip rate reached
+  `0.0234375`, matching CLS-top and exceeding the single learned mask's
+  `0.015625`.
+- Fed the zero-replacement mixture-effect feature score into the existing
+  soft-score causal DFR consumer. Learned top-64/top-128 and matched random
+  top-64/top-128 all tied at test WGA `0.90625` and test accuracy `0.953125`, so
+  the stronger intervention diagnostic still does not become a discriminative
+  downstream feature-ranking signal in the current consumer.
+- Interpretation: multi-hypothesis probing is the first patch-probe iteration to
+  beat the single learned mask on the main intervention metric. The useful
+  decision rule is not posterior marginal averaging, which smears masks, but
+  effect-selected posterior components. Next steps should improve the consumer
+  or train the mixture with the effect-selection rule in the loop, rather than
+  spending compute on full benchmark promotion yet.
