@@ -428,9 +428,16 @@ goal, not incidental development mechanics.
   `hf_patch_norm_components` uses token-norm top/bottom patch tokens. A new
   `causality_experiments.patch_interventions` module provides latent patch
   selectors, zero/mean/donor/prototype replacement helpers, and summary metrics
-  for counterfactual logit effects. This is infrastructure only so far; the
-  next empirical step is to run limit384 screens for the new selector pooling
-  modes and produce intervention reports against random/donor controls.
+  for counterfactual logit effects. The first limit384 selector screens did not
+  beat fixed DINO patch pooling: `hf_patch_cls_components` tied the old
+  diagnostic at official DFR test WGA `0.875`, while `hf_patch_norm_components`
+  reached `0.84375`. A compact clue/soft-shrink pass on the CLS selector also
+  stayed at `0.875`; fused clues selected a meaningfully different support from
+  stats-only top-k, but the downstream shrink search mostly chose scale `1.0`,
+  so the current soft-shrink consumer is effectively falling back to plain DFR.
+  Next empirical work should produce direct intervention reports against
+  random/donor/prototype controls rather than scaling these selector-pooling
+  recipes to full no-limit runs.
 - The first new Track A configs are:
   - `waterbirds_features_official_adv_representation_dfr_score_gate`
   - `waterbirds_features_official_adv_representation_dfr_nuisance_regularized`

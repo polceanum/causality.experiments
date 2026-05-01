@@ -251,6 +251,23 @@ issues unless they invalidate an experimental result.
     decomposition as a direction, but use a better component selector or an
     efficient crop/object extraction path before spending seed-sweep compute.
 
+- **CLS-similarity and token-norm DINO patch selectors as immediate upgrades**
+  - Attempt: replace fixed center/corner patch pooling with frozen DINOv2-small
+    selector components, using CLS-similarity top/bottom patches or token-norm
+    top/bottom patches, then evaluate through official DFR on the limit384
+    diagnostic slice.
+  - Result: CLS-similarity tied the fixed patch diagnostic at test WGA `0.875`;
+    token norm reached only `0.84375`. A compact clue/soft-shrink pass on the
+    CLS selector also stayed at `0.875`, with fused clues changing the selected
+    feature support but not the downstream metric.
+  - Interpretation: selector pooling changes the representation enough to be a
+    useful diagnostic, but the current pooled summaries and soft-shrink consumer
+    do not create a benchmark improvement.
+  - Action: do not launch full no-limit runs for these selector-pooling recipes
+    alone. Use the latent patch intervention path to test whether selected
+    patches have label-specific counterfactual effects that beat random,
+    background-like, donor, and prototype controls.
+
 - **Fixture-level ceiling as evidence of SOTA**
   - Attempt: compose counterfactual augmentation with adversarial probe training
     and evaluate first on the Waterbirds-style fixture.

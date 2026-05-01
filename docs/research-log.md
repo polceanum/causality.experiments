@@ -812,3 +812,33 @@ signals. Keep this focused on what was tried and what was learned.
 - Verification: focused feature-prep and patch-intervention tests passed with
   `26 passed`; adjacent discovery/clue/sweep tests passed with `30 passed`;
   the full regression suite passed with `145 passed`.
+
+## 2026-05-01: Selector Patch Pooling Screens
+
+- Committed and pushed the component-causal infrastructure as `8e14e9d`
+  (`Add Waterbirds component patch interventions`) after the full regression
+  suite passed with `145 passed`.
+- Ran frozen local DINOv2-small selector pooling on the stratified limit384
+  screen with seed `101`, CPU, `official_dfr_val_tr_retrains50`, and feature
+  artifacts under `data/waterbirds/component_screens`:
+  - `hf_patch_cls_components`: official DFR test WGA `0.875`, test accuracy
+    `0.9296875`.
+  - `hf_patch_norm_components`: official DFR test WGA `0.84375`, test accuracy
+    `0.9296875`.
+- Interpretation: CLS-similarity selection ties the earlier fixed DINO
+  center/corner patch diagnostic but does not improve it. Token-norm selection
+  is worse. Neither selector warrants a full no-limit run as-is.
+- Ran a compact clue/soft-shrink pass on the better CLS-similarity selector
+  feature table. Stats, fused, heuristic, and most random candidates at top-k
+  `64`, `128`, and `256` stayed at test WGA `0.875`; random top-128 dropped to
+  `0.8125`. Fused top-64 selected only `47/64` of the stats top-64 features
+  (Jaccard about `0.58`), so the clue bridge is changing the support, but the
+  downstream official causal-shrink search selected shrink scale `1.0` for
+  nearly every candidate.
+- Ran the pruned-soft-score variant for stats and fused top-k `64`, `128`, and
+  `256`. Fused stayed at `0.875`; stats top-256 dropped to `0.84375`.
+- Interpretation: current selector pooling plus current soft-shrink is not the
+  1-2% mechanism. The more useful next step is direct latent patch
+  intervention reporting: compare top CLS-sim patches against random patches,
+  background-like patches, donor replacements, and prototype replacements, then
+  convert only intervention effects that beat controls into discovery scores.
