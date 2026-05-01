@@ -651,3 +651,29 @@ signals. Keep this focused on what was tried and what was learned.
   tests passed with `19 passed`. No full Waterbirds feature extraction was run
   yet; the next empirical step is a limited conflict-sampling screen before any
   full CPU run.
+
+## 2026-05-01: Conflict Sampling Limit384 Screen
+
+- Started the first upstream feature-generation experiment with
+  `scripts/run_waterbirds_official_backbone_sweep.py` on a stratified limit384
+  slice, seed 101, LR `0.001`, no environment adversary, and official DFR as
+  the unchanged downstream evaluator.
+- Conflict-only upweighting at minority weight `3.0` gave mixed results:
+  - e3 feature artifact: base test WGA `0.75`, downstream official DFR test WGA
+    `0.84375`. This improves over the old e3 no-conflict limit384 downstream
+    result (`0.8125`) but only ties the old e5 no-conflict limit384 anchor.
+  - e5 feature artifact: base test WGA `0.875`, downstream official DFR test
+    WGA `0.75`, so extra epochs overfit or damage the downstream feature space.
+- Lighter conflict-only upweighting at minority weight `1.5` for e3 was worse:
+  base test WGA `0.84375`, downstream official DFR test WGA `0.8125`.
+- Group-balanced conflict upweighting at weight `3.0` collapsed for e3 at the
+  base-ERM stage: test WGA `0.0`, strong label-1 bias, and no downstream DFR
+  run. The e5 grouped-conflict branch was stopped early after the e3 collapse
+  and the conflict-only e5 regression made the setting unlikely to be worth the
+  remaining CPU time.
+- Interpretation: the conflict-sampling implementation works and can alter the
+  representation, but these exact sampling weights are not a whole-point path.
+  Avoid full runs for conflict-only weight `1.5`/`3.0` and grouped-conflict
+  weight `3.0`; the next upstream experiment should change the training recipe
+  more materially, for example a different backbone/source or a staged sampler
+  rather than uniform conflict oversampling from epoch 1.

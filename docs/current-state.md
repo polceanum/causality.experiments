@@ -477,6 +477,12 @@ goal, not incidental development mechanics.
   feature artifacts through `--sample-modes` and `--minority-weight`. Use this
   to test background-conflict/minority upweighting at the backbone feature
   stage, then evaluate with the unchanged official DFR head.
+- First limit384 conflict-sampling screen was not promotable. Conflict-only e3
+  at weight `3.0` reached downstream official DFR test WGA `0.84375`, above the
+  old e3 limit384 no-conflict result (`0.8125`) but tying the old e5 limit384
+  anchor. Conflict-only e5 fell to `0.75`; lighter e3 conflict weight `1.5`
+  fell to `0.8125`; and grouped-conflict weight `3.0` collapsed at base ERM for
+  e3 (`0.0` test WGA). Do not spend full-run compute on these exact settings.
 
 1. Get a real Waterbirds-compatible feature run.
    - Use local features, real splits, labels, and group/background metadata.
@@ -512,7 +518,10 @@ goal, not incidental development mechanics.
    - For future whole-point improvements, prioritize feature generation and
      training distribution changes before DFR. The first live implementation is
      conflict/minority sampling during backbone ERM fine-tuning; screen it with
-     small limits before any no-limit full feature extraction.
+     small limits before any no-limit full feature extraction. The initial
+     conflict-only/grouped-conflict limit384 screen failed to beat the existing
+     e5 limit anchor, so the next upstream attempt should change the recipe
+     more substantially than just increasing conflict-example sampling weight.
 3. Compose the strongest local mechanisms.
    - Future mechanism changes should be screened first against the matched
      fixed/grouped random-mask controls, not just against earlier discovery

@@ -187,6 +187,24 @@ issues unless they invalidate an experimental result.
   - Action: keep the config as the next official-compatible baseline and tune
     clue support/scale grids under the paired seed gate.
 
+- **Uniform conflict-example upweighting as the first upstream feature fix**
+  - Attempt: use the new backbone fine-tuning sample modes to upweight
+    Waterbirds train examples whose bird label and background conflict, then
+    evaluate the resulting limit384 feature artifacts through unchanged
+    official DFR.
+  - Result: conflict-only e3 at weight `3.0` reached downstream official DFR
+    test WGA `0.84375`, tying the old e5 no-conflict limit384 anchor but not
+    exceeding it. Conflict-only e5 fell to `0.75`; lighter e3 conflict weight
+    `1.5` fell to `0.8125`; grouped-conflict weight `3.0` collapsed at base ERM
+    for e3 with test WGA `0.0`.
+  - Interpretation: simple uniform conflict oversampling changes the feature
+    representation, but the useful region is narrow and not strong enough to
+    justify full-run compute.
+  - Action: do not launch full runs for these exact conflict-only or
+    grouped-conflict settings. Future upstream work should use a different
+    backbone/source or a staged/tempered sampling schedule rather than static
+    conflict weighting from the first epoch.
+
 - **Fixture-level ceiling as evidence of SOTA**
   - Attempt: compose counterfactual augmentation with adversarial probe training
     and evaluate first on the Waterbirds-style fixture.
