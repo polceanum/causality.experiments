@@ -205,6 +205,21 @@ issues unless they invalidate an experimental result.
     backbone/source or a staged/tempered sampling schedule rather than static
     conflict weighting from the first epoch.
 
+- **Simple staged conflict upweighting as a stronger upstream feature fix**
+  - Attempt: start Waterbirds ERM backbone fine-tuning with natural sampling,
+    then switch to conflict-example upweighting after two epochs on the limit384
+    diagnostic slice.
+  - Result: e5/LR `0.001`, conflict weight `3.0`, sample warmup `2`, and seed
+    `101` produced strong base ERM test WGA `0.9375`, but downstream official
+    DFR test WGA was only `0.8125`.
+  - Interpretation: better base classifier WGA is not sufficient; the exported
+    representation still did not help the official DFR head and underperformed
+    the old no-conflict e5 limit384 anchor (`0.84375`).
+  - Action: do not launch full runs for this staged conflict recipe. Treat
+    simple conflict-sampling schedules as locally exhausted unless a future
+    mechanism changes the representation objective or feature source more
+    substantially.
+
 - **Fixture-level ceiling as evidence of SOTA**
   - Attempt: compose counterfactual augmentation with adversarial probe training
     and evaluate first on the Waterbirds-style fixture.

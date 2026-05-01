@@ -6,6 +6,7 @@ import torch
 import yaml
 
 from scripts.prepare_waterbirds_features import (
+    _active_erm_sample_mode,
     _balanced_group_sample_weights,
     _canonical_erm_sample_mode,
     _erm_finetune_sample_weights,
@@ -130,6 +131,12 @@ def test_conflict_sample_weights_upweight_minority_waterbirds_groups() -> None:
     assert float(weights.mean()) == 1.0
 
 
+def test_active_sample_mode_uses_natural_warmup_before_target() -> None:
+    assert _active_erm_sample_mode("conflict_upweight", epoch_index=0, sample_warmup_epochs=2) == "natural"
+    assert _active_erm_sample_mode("conflict_upweight", epoch_index=1, sample_warmup_epochs=2) == "natural"
+    assert _active_erm_sample_mode("conflict_upweight", epoch_index=2, sample_warmup_epochs=2) == "conflict_upweight"
+
+
 def test_stratified_metadata_limit_keeps_split_group_coverage() -> None:
     rows = []
     for split in ("train", "val", "test"):
@@ -228,6 +235,7 @@ def test_protocol_feature_matrix_uses_official_train_transform_for_official_styl
         erm_finetune_balance_groups=False,
         erm_finetune_sample_mode="conflict_upweight",
         erm_finetune_minority_weight=3.0,
+        erm_finetune_sample_warmup_epochs=1,
         eval_transform_style="official",
         erm_finetune_preset=None,
         training_checkpoint_path=tmp_path / "train.pt",
@@ -237,6 +245,7 @@ def test_protocol_feature_matrix_uses_official_train_transform_for_official_styl
     assert seen_train_kwargs["checkpoint_path"] == tmp_path / "train.pt"
     assert seen_train_kwargs["sample_mode"] == "conflict_upweight"
     assert seen_train_kwargs["minority_weight"] == 3.0
+    assert seen_train_kwargs["sample_warmup_epochs"] == 1
 
 
 def test_protocol_feature_matrix_can_use_frozen_huggingface_backbone(monkeypatch, tmp_path: Path) -> None:

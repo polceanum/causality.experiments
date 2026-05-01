@@ -648,7 +648,7 @@ signals. Keep this focused on what was tried and what was learned.
   `_conflictw3` and `_gbconflictw3`. The runner records the sampling mode in
   expected manifest settings so cached feature artifacts remain auditable.
 - Verification: syntax checks passed, and focused feature-prep/backbone-search
-  tests passed with `19 passed`. No full Waterbirds feature extraction was run
+  tests passed with `20 passed`. No full Waterbirds feature extraction was run
   yet; the next empirical step is a limited conflict-sampling screen before any
   full CPU run.
 
@@ -677,3 +677,31 @@ signals. Keep this focused on what was tried and what was learned.
   weight `3.0`; the next upstream experiment should change the training recipe
   more materially, for example a different backbone/source or a staged sampler
   rather than uniform conflict oversampling from epoch 1.
+
+## 2026-05-01: Staged Conflict Sampling Limit384 Screen
+
+- Added staged ERM fine-tune sampling to the Waterbirds feature-prep path. The
+  trainer now accepts `erm_finetune_sample_warmup_epochs`, uses natural sampling
+  before that epoch boundary, then switches to the resolved target sample mode;
+  the setting is recorded in resolved manifests and in official backbone sweep
+  tags such as `_conflictw3_samplewarm2`.
+- Checked local Hugging Face vision caches for a fresh frozen-source screen.
+  Only `facebook/dinov2-small` and `openai/clip-vit-base-patch32` were present
+  among the searched families, and both were already negative in earlier
+  limit384 diagnostics, so no new local frozen HF source was worth rerunning.
+- Ran the first staged conflict screen with seed `101`, e5, LR `0.001`, no
+  env-adv, conflict weight `3.0`, sample warmup `2`, CPU, and limit384. The
+  training log confirms epochs 1-2 used `natural` sampling and epochs 3-5 used
+  `conflict_upweight`.
+- Result: manifest and base metrics cleared guardrails. Base ERM reached val
+  WGA `0.6875` and test WGA `0.9375`, but downstream official DFR reached val
+  WGA `0.875` and test WGA `0.8125`. The summary artifacts are
+  `outputs/dfr_sweeps/official-backbone-staged-conflict-limit384.csv` and
+  `outputs/dfr_sweeps/official-backbone-staged-conflict-limit384.json`.
+- Interpretation: staging prevented the base-ERM collapse seen in the bluntest
+  grouped-conflict setting and produced a much stronger base classifier, but it
+  did not produce better DFR-ready features. This staged conflict recipe is not
+  a full-run candidate; future Track B work needs a materially different
+  representation mechanism, not more small conflict-sampling schedule tweaks.
+- Verification: focused tests passed with `20 passed`, and the full regression
+  suite passed with `131 passed`.

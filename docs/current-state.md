@@ -27,7 +27,7 @@ goal, not incidental development mechanics.
   development signals.
 - `main` is pushed to GitHub.
 - Latest pushed commit before the current working round:
-  - `1deb2c1` `Align benchmark reporting with literature`
+  - `9026d6a` `Log conflict sampling screen`
 - The repo contains a runnable PyTorch experiment harness for all 8 paper
   experiments using tiny generated fixtures.
 - Runnable methods:
@@ -359,7 +359,11 @@ goal, not incidental development mechanics.
   features with weights transforms reached downstream WGA `0.84375`, frozen
   ConvNeXt-Tiny ImageNet-V1 features reached `0.8125`, frozen CLIP ViT-B/32
   features reached `0.625`, and frozen DINOv2-small features reached `0.84375`.
-  Do not scale these frozen sources to full benchmark runs.
+  Do not scale these frozen sources to full benchmark runs. The local Hugging
+  Face cache currently only has `facebook/dinov2-small` and
+  `openai/clip-vit-base-patch32` among the checked vision families, so there is
+  no fresh stronger local HF feature source to screen without downloading new
+  weights.
 - A stricter training sanity check confirms the Track B ResNet path can train
   properly when the LR is less aggressive, but this still does not create a
   downstream win. On the limit384 diagnostic slice, e20/LR `0.0003` completed
@@ -372,6 +376,16 @@ goal, not incidental development mechanics.
   diagnostic slice. The full no-limit e20/LR `0.0003` CPU run was stopped after
   one completed epoch because it was too slow for an interactive local probe;
   use checkpointed/resumable scheduled runs for any future full-data training.
+- Track B now supports staged ERM fine-tune sampling through
+  `erm_finetune_sample_warmup_epochs`: the feature-prep trainer can start with
+  natural sampling and switch to the requested sample mode after a fixed number
+  of epochs, with the setting recorded in manifests and sweep tags. The first
+  staged conflict screen was negative despite a strong base classifier. With
+  e5/LR `0.001`, conflict weight `3.0`, sample warmup `2`, seed `101`, and
+  limit384, base ERM reached test WGA `0.9375` but downstream official DFR
+  reached only test WGA `0.8125`. This is below the old e5 no-conflict
+  limit384 anchor (`0.84375`), so do not launch a full run for this staged
+  conflict recipe.
 - The first new Track A configs are:
   - `waterbirds_features_official_adv_representation_dfr_score_gate`
   - `waterbirds_features_official_adv_representation_dfr_nuisance_regularized`
@@ -520,8 +534,10 @@ goal, not incidental development mechanics.
      conflict/minority sampling during backbone ERM fine-tuning; screen it with
      small limits before any no-limit full feature extraction. The initial
      conflict-only/grouped-conflict limit384 screen failed to beat the existing
-     e5 limit anchor, so the next upstream attempt should change the recipe
-     more substantially than just increasing conflict-example sampling weight.
+     e5 limit anchor, and the staged e5 conflict screen improved base ERM while
+     still falling to `0.8125` downstream official DFR. The next upstream
+     attempt should change the representation mechanism more substantially than
+     conflict-example sampling weight or a simple on/off schedule.
 3. Compose the strongest local mechanisms.
    - Future mechanism changes should be screened first against the matched
      fixed/grouped random-mask controls, not just against earlier discovery

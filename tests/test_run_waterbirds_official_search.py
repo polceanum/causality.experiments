@@ -532,7 +532,7 @@ def test_run_waterbirds_official_backbone_sweep_tags_group_balanced_features(tmp
     assert summary["candidates"][0]["tag"] == "official_e1_lr0.001_envadv0_gb_limit48"
 
 
-def test_run_waterbirds_official_backbone_sweep_tags_conflict_sample_mode(tmp_path: Path, monkeypatch) -> None:
+def test_run_waterbirds_official_backbone_sweep_tags_staged_conflict_sample_mode(tmp_path: Path, monkeypatch) -> None:
     dfr_config = tmp_path / "official_dfr.yaml"
     _write_config(dfr_config, name="waterbirds_features_official_dfr_val_tr", method_kind="official_dfr_val_tr")
     seen: dict[str, object] = {}
@@ -567,6 +567,7 @@ def test_run_waterbirds_official_backbone_sweep_tags_conflict_sample_mode(tmp_pa
                 "erm_finetune_balance_groups": False,
                 "erm_finetune_sample_mode": "conflict_upweight",
                 "erm_finetune_minority_weight": 3.0,
+                "erm_finetune_sample_warmup_epochs": 1,
                 "erm_env_adv_weight": 0.0,
                 "erm_env_adv_hidden_dim": 0,
                 "erm_env_adv_loss_weight": 1.0,
@@ -574,7 +575,7 @@ def test_run_waterbirds_official_backbone_sweep_tags_conflict_sample_mode(tmp_pa
                 "erm_finetune_warmup_mode": "head",
                 "weights_variant": "legacy_pretrained",
                 "eval_transform_style": "official",
-                "feature_extractor_suffix": "waterbirds_official_backbone_e1_lr0.001_envadv0_conflictw3_limit48_seed101_penultimate",
+                "feature_extractor_suffix": "waterbirds_official_backbone_e1_lr0.001_envadv0_conflictw3_samplewarm1_limit48_seed101_penultimate",
                 "erm_finetune_preset": "",
             },
         )
@@ -616,6 +617,8 @@ def test_run_waterbirds_official_backbone_sweep_tags_conflict_sample_mode(tmp_pa
             "conflict_upweight",
             "--minority-weight",
             "3.0",
+            "--sample-warmup-epochs",
+            "1",
             "--limit",
             "48",
             "--output-root",
@@ -632,9 +635,10 @@ def test_run_waterbirds_official_backbone_sweep_tags_conflict_sample_mode(tmp_pa
     summary = json.loads((tmp_path / "conflict_summary.json").read_text(encoding="utf-8"))
     assert seen["erm_finetune_sample_mode"] == "conflict_upweight"
     assert seen["erm_finetune_minority_weight"] == 3.0
+    assert seen["erm_finetune_sample_warmup_epochs"] == 1
     assert seen["erm_finetune_balance_groups"] is False
-    assert str(seen["features_csv"]).endswith("features_official_e1_lr0.001_envadv0_conflictw3_limit48_seed101.csv")
-    assert summary["candidates"][0]["tag"] == "official_e1_lr0.001_envadv0_conflictw3_limit48"
+    assert str(seen["features_csv"]).endswith("features_official_e1_lr0.001_envadv0_conflictw3_samplewarm1_limit48_seed101.csv")
+    assert summary["candidates"][0]["tag"] == "official_e1_lr0.001_envadv0_conflictw3_samplewarm1_limit48"
 
 
 def test_run_waterbirds_official_backbone_sweep_tags_alternate_representation_source(tmp_path: Path, monkeypatch) -> None:

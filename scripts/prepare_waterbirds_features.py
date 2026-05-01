@@ -449,6 +449,14 @@ def _erm_finetune_sample_weights(
     raise ValueError(f"ERM fine-tune sample mode must be one of: {known}.")
 
 
+def _active_erm_sample_mode(target_sample_mode: str, *, epoch_index: int, sample_warmup_epochs: int) -> str:
+    if sample_warmup_epochs < 0:
+        raise ValueError("erm_finetune_sample_warmup_epochs must be non-negative.")
+    if epoch_index < sample_warmup_epochs:
+        return "natural"
+    return _canonical_erm_sample_mode(target_sample_mode)
+
+
 def _make_optimizer(
     parameters: list[torch.nn.Parameter],
     *,
@@ -495,6 +503,7 @@ def train_erm_featurizer(
     balance_groups: bool,
     sample_mode: str = "natural",
     minority_weight: float = 1.0,
+    sample_warmup_epochs: int = 0,
     env_adv_weight: float = 0.0,
     env_adv_hidden_dim: int = 0,
     env_adv_loss_weight: float = 1.0,
@@ -513,21 +522,25 @@ def train_erm_featurizer(
     _set_trainable_layers(model, initial_mode)
     dataset = WaterbirdsImageDataset(dataset_dir, train_metadata, transform)
     resolved_sample_mode = _canonical_erm_sample_mode(sample_mode, balance_groups=balance_groups)
-    sample_weights = _erm_finetune_sample_weights(
-        train_metadata,
-        sample_mode=resolved_sample_mode,
-        minority_weight=minority_weight,
-    )
-    sampler = None
-    shuffle = True
-    if sample_weights is not None:
-        sampler = WeightedRandomSampler(
-            sample_weights,
-            num_samples=len(train_metadata),
-            replacement=True,
+    sample_warmup_epochs = int(sample_warmup_epochs)
+
+    def build_loader(active_sample_mode: str) -> DataLoader:
+        sample_weights = _erm_finetune_sample_weights(
+            train_metadata,
+            sample_mode=active_sample_mode,
+            minority_weight=minority_weight,
         )
-        shuffle = False
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, sampler=sampler, num_workers=0)
+        sampler = None
+        shuffle = True
+        if sample_weights is not None:
+            sampler = WeightedRandomSampler(
+                sample_weights,
+                num_samples=len(train_metadata),
+                replacement=True,
+            )
+            shuffle = False
+        return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, sampler=sampler, num_workers=0)
+
     nuisance_head: torch.nn.Module | None = None
     if env_adv_weight > 0.0:
         if env_adv_hidden_dim > 0:
@@ -576,11 +589,17 @@ def train_erm_featurizer(
             ),
             flush=True,
         )
-    progress_interval = max(1, len(loader) // 6)
     for epoch_idx in range(start_epoch, epochs):
         if warmup_epochs > 0 and epoch_idx == warmup_epochs:
             _set_trainable_layers(model, mode)
             optimizer = build_optimizer()
+        active_sample_mode = _active_erm_sample_mode(
+            resolved_sample_mode,
+            epoch_index=epoch_idx,
+            sample_warmup_epochs=sample_warmup_epochs,
+        )
+        loader = build_loader(active_sample_mode)
+        progress_interval = max(1, len(loader) // 6)
         model.train()
         if nuisance_head is not None:
             nuisance_head.train()
@@ -595,8 +614,10 @@ def train_erm_featurizer(
                     "epochs": epochs,
                     "batches": len(loader),
                     "train_examples": len(train_metadata),
-                    "sample_mode": resolved_sample_mode,
+                    "sample_mode": active_sample_mode,
+                    "target_sample_mode": resolved_sample_mode,
                     "minority_weight": float(minority_weight),
+                    "sample_warmup_epochs": sample_warmup_epochs,
                 },
                 sort_keys=True,
             ),
@@ -689,6 +710,7 @@ def _official_erm_settings() -> dict[str, Any]:
         "erm_finetune_balance_groups": False,
         "erm_finetune_sample_mode": "natural",
         "erm_finetune_minority_weight": 1.0,
+        "erm_finetune_sample_warmup_epochs": 0,
         "erm_env_adv_weight": 0.0,
         "erm_env_adv_hidden_dim": 0,
         "erm_env_adv_loss_weight": 1.0,
@@ -722,7 +744,10 @@ def _resolve_erm_settings(
     erm_finetune_preset: str | None,
     erm_finetune_sample_mode: str = "natural",
     erm_finetune_minority_weight: float = 1.0,
+    erm_finetune_sample_warmup_epochs: int = 0,
 ) -> dict[str, Any]:
+    if int(erm_finetune_sample_warmup_epochs) < 0:
+        raise ValueError("erm_finetune_sample_warmup_epochs must be non-negative.")
     settings = {
         "batch_size": int(batch_size),
         "erm_finetune_epochs": int(erm_finetune_epochs),
@@ -738,6 +763,7 @@ def _resolve_erm_settings(
             balance_groups=bool(erm_finetune_balance_groups),
         ),
         "erm_finetune_minority_weight": float(erm_finetune_minority_weight),
+        "erm_finetune_sample_warmup_epochs": int(erm_finetune_sample_warmup_epochs),
         "erm_env_adv_weight": float(erm_env_adv_weight),
         "erm_env_adv_hidden_dim": int(erm_env_adv_hidden_dim),
         "erm_env_adv_loss_weight": float(erm_env_adv_loss_weight),
@@ -831,6 +857,7 @@ def extract_protocol_feature_matrix(
     erm_finetune_balance_groups: bool,
     erm_finetune_sample_mode: str = "natural",
     erm_finetune_minority_weight: float = 1.0,
+    erm_finetune_sample_warmup_epochs: int = 0,
     erm_env_adv_weight: float = 0.0,
     erm_env_adv_hidden_dim: int = 0,
     erm_env_adv_loss_weight: float = 1.0,
@@ -855,6 +882,7 @@ def extract_protocol_feature_matrix(
         erm_finetune_balance_groups=erm_finetune_balance_groups,
         erm_finetune_sample_mode=erm_finetune_sample_mode,
         erm_finetune_minority_weight=erm_finetune_minority_weight,
+        erm_finetune_sample_warmup_epochs=erm_finetune_sample_warmup_epochs,
         erm_env_adv_weight=erm_env_adv_weight,
         erm_env_adv_hidden_dim=erm_env_adv_hidden_dim,
         erm_env_adv_loss_weight=erm_env_adv_loss_weight,
@@ -909,6 +937,7 @@ def extract_protocol_feature_matrix(
             balance_groups=bool(settings["erm_finetune_balance_groups"]),
             sample_mode=str(settings["erm_finetune_sample_mode"]),
             minority_weight=float(settings["erm_finetune_minority_weight"]),
+            sample_warmup_epochs=int(settings["erm_finetune_sample_warmup_epochs"]),
             env_adv_weight=float(settings["erm_env_adv_weight"]),
             env_adv_hidden_dim=int(settings["erm_env_adv_hidden_dim"]),
             env_adv_loss_weight=float(settings["erm_env_adv_loss_weight"]),
@@ -1046,6 +1075,7 @@ def prepare_waterbirds_features_artifact(
     erm_finetune_balance_groups: bool = False,
     erm_finetune_sample_mode: str = "natural",
     erm_finetune_minority_weight: float = 1.0,
+    erm_finetune_sample_warmup_epochs: int = 0,
     erm_env_adv_weight: float = 0.0,
     erm_env_adv_hidden_dim: int = 0,
     erm_env_adv_loss_weight: float = 1.0,
@@ -1084,6 +1114,7 @@ def prepare_waterbirds_features_artifact(
         erm_finetune_balance_groups=erm_finetune_balance_groups,
         erm_finetune_sample_mode=erm_finetune_sample_mode,
         erm_finetune_minority_weight=erm_finetune_minority_weight,
+        erm_finetune_sample_warmup_epochs=erm_finetune_sample_warmup_epochs,
         erm_env_adv_weight=erm_env_adv_weight,
         erm_env_adv_hidden_dim=erm_env_adv_hidden_dim,
         erm_env_adv_loss_weight=erm_env_adv_loss_weight,
@@ -1149,6 +1180,7 @@ def prepare_waterbirds_features(
     erm_finetune_balance_groups: bool = False,
     erm_finetune_sample_mode: str = "natural",
     erm_finetune_minority_weight: float = 1.0,
+    erm_finetune_sample_warmup_epochs: int = 0,
     erm_env_adv_weight: float = 0.0,
     erm_env_adv_hidden_dim: int = 0,
     erm_env_adv_loss_weight: float = 1.0,
@@ -1181,6 +1213,7 @@ def prepare_waterbirds_features(
         erm_finetune_balance_groups=erm_finetune_balance_groups,
         erm_finetune_sample_mode=erm_finetune_sample_mode,
         erm_finetune_minority_weight=erm_finetune_minority_weight,
+        erm_finetune_sample_warmup_epochs=erm_finetune_sample_warmup_epochs,
         erm_env_adv_weight=erm_env_adv_weight,
         erm_env_adv_hidden_dim=erm_env_adv_hidden_dim,
         erm_env_adv_loss_weight=erm_env_adv_loss_weight,
@@ -1214,6 +1247,7 @@ def main() -> None:
     parser.add_argument("--erm-finetune-balance-groups", action="store_true")
     parser.add_argument("--erm-finetune-sample-mode", default="natural", choices=tuple(sorted(ERM_SAMPLE_MODES)))
     parser.add_argument("--erm-finetune-minority-weight", type=float, default=1.0)
+    parser.add_argument("--erm-finetune-sample-warmup-epochs", type=int, default=0)
     parser.add_argument("--erm-env-adv-weight", type=float, default=0.0)
     parser.add_argument("--erm-env-adv-hidden-dim", type=int, default=0)
     parser.add_argument("--erm-env-adv-loss-weight", type=float, default=1.0)
@@ -1247,6 +1281,7 @@ def main() -> None:
         erm_finetune_balance_groups=args.erm_finetune_balance_groups,
         erm_finetune_sample_mode=args.erm_finetune_sample_mode,
         erm_finetune_minority_weight=args.erm_finetune_minority_weight,
+        erm_finetune_sample_warmup_epochs=args.erm_finetune_sample_warmup_epochs,
         erm_env_adv_weight=args.erm_env_adv_weight,
         erm_env_adv_hidden_dim=args.erm_env_adv_hidden_dim,
         erm_env_adv_loss_weight=args.erm_env_adv_loss_weight,

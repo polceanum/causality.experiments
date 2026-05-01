@@ -39,6 +39,8 @@ def _settings_match_status(expected: dict[str, Any], actual: dict[str, Any]) -> 
                 continue
         if key == "erm_finetune_minority_weight" and actual_value is None and float(value) == 1.0:
             continue
+        if key == "erm_finetune_sample_warmup_epochs" and actual_value is None and int(value) == 0:
+            continue
         if actual_value != value:
             mismatches.append(key)
     if mismatches:
@@ -80,18 +82,23 @@ def _backbone_tag(backbone_name: str) -> str:
     return "" if backbone_name.strip().lower() == "resnet50" else f"_b{_tag_value(backbone_name)}"
 
 
-def _sample_mode_tag(sample_mode: str, minority_weight: float) -> str:
+def _sample_mode_tag(sample_mode: str, minority_weight: float, sample_warmup_epochs: int = 0) -> str:
     mode = _canonical_erm_sample_mode(sample_mode)
     if mode == "natural":
         return ""
     if mode == "group_balanced":
-        return "_gb"
-    weight_tag = _tag_value(f"{minority_weight:g}")
-    if mode == "conflict_upweight":
-        return f"_conflictw{weight_tag}"
-    if mode == "group_balanced_conflict_upweight":
-        return f"_gbconflictw{weight_tag}"
-    raise ValueError(f"Unknown sample mode {sample_mode!r}.")
+        base = "_gb"
+    else:
+        weight_tag = _tag_value(f"{minority_weight:g}")
+        if mode == "conflict_upweight":
+            base = f"_conflictw{weight_tag}"
+        elif mode == "group_balanced_conflict_upweight":
+            base = f"_gbconflictw{weight_tag}"
+        else:
+            raise ValueError(f"Unknown sample mode {sample_mode!r}.")
+    if sample_warmup_epochs > 0:
+        return f"{base}_samplewarm{sample_warmup_epochs}"
+    return base
 
 
 def _row(
@@ -141,6 +148,7 @@ def main() -> None:
     parser.add_argument("--balance-groups", action="store_true")
     parser.add_argument("--sample-modes", nargs="*", default=[])
     parser.add_argument("--minority-weight", type=float, default=1.0)
+    parser.add_argument("--sample-warmup-epochs", type=int, default=0)
     parser.add_argument("--warmup-epochs", type=int, default=0)
     parser.add_argument("--warmup-mode", choices=("head", "layer4", "all"), default="head")
     parser.add_argument(
@@ -175,7 +183,7 @@ def main() -> None:
     ):
         sample_mode = _canonical_erm_sample_mode(str(sample_mode_raw), balance_groups=bool(args.balance_groups))
         limit_tag = f"_limit{args.limit}" if args.limit is not None else ""
-        balance_tag = _sample_mode_tag(sample_mode, float(args.minority_weight))
+        balance_tag = _sample_mode_tag(sample_mode, float(args.minority_weight), int(args.sample_warmup_epochs))
         source_tag = f"{_backbone_tag(str(backbone_name))}{_source_tag(str(weights_variant), str(eval_transform_style))}"
         tag = f"official_e{epochs}_lr{lr:g}_envadv{env_adv_weight:g}{balance_tag}{source_tag}{limit_tag}_seed{seed}"
         features_csv = Path(args.features_dir) / f"features_{tag}.csv"
@@ -194,6 +202,7 @@ def main() -> None:
             erm_finetune_balance_groups=balance_groups,
             erm_finetune_sample_mode=sample_mode,
             erm_finetune_minority_weight=float(args.minority_weight),
+            erm_finetune_sample_warmup_epochs=int(args.sample_warmup_epochs),
             erm_env_adv_weight=env_adv_weight,
             erm_env_adv_hidden_dim=128 if env_adv_weight > 0.0 else 0,
             erm_env_adv_loss_weight=1.0,
@@ -230,6 +239,7 @@ def main() -> None:
                     "reuse_features": bool(args.reuse_features),
                     "features_csv": str(features_csv),
                     "sample_mode": sample_mode,
+                    "sample_warmup_epochs": int(args.sample_warmup_epochs),
                 },
                 sort_keys=True,
             ),
@@ -256,6 +266,7 @@ def main() -> None:
             erm_finetune_balance_groups=balance_groups,
             erm_finetune_sample_mode=sample_mode,
             erm_finetune_minority_weight=float(args.minority_weight),
+            erm_finetune_sample_warmup_epochs=int(args.sample_warmup_epochs),
             erm_env_adv_weight=env_adv_weight,
             erm_env_adv_hidden_dim=128 if env_adv_weight > 0.0 else 0,
             erm_env_adv_loss_weight=1.0,
