@@ -803,11 +803,9 @@ signals. Keep this focused on what was tried and what was learned.
   patch-probe stack failed to transfer into seed-stable downstream WGA; the
   component-aware feature export remains, but the intervention module no longer
   exists in active code.
-- Interpretation: this does not yet claim a Waterbirds improvement. It creates
-  the missing bridge between patch decomposition and causal discovery: patch
-  components can now be named, probed, counterfactually edited, and converted
-  into discovery-compatible evidence before downstream DFR or causal-shrink
-  consumers use them.
+- Interpretation: this did not claim a Waterbirds improvement. The durable
+  piece is the named component export; the later patch-editing bridge was
+  pruned after failing to produce seed-stable downstream gains.
 - Verification at the time: focused feature-prep and patch-intervention tests
   passed with `26 passed`; adjacent discovery/clue/sweep tests passed with
   `30 passed`; the full regression suite passed with `145 passed`.
@@ -837,10 +835,8 @@ signals. Keep this focused on what was tried and what was learned.
 - Ran the pruned-soft-score variant for stats and fused top-k `64`, `128`, and
   `256`. Fused stayed at `0.875`; stats top-256 dropped to `0.84375`.
 - Interpretation: current selector pooling plus current soft-shrink is not the
-  1-2% mechanism. The more useful next step is direct latent patch
-  intervention reporting: compare top CLS-sim patches against random patches,
-  background-like patches, donor replacements, and prototype replacements, then
-  convert only intervention effects that beat controls into discovery scores.
+  1-2% mechanism. The direct latent patch-intervention follow-up was tried and
+  later pruned; see the failed-attempts log before reviving this path.
 
 ## 2026-05-01: Patch Probe Stack Pruned
 
