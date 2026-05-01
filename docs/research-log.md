@@ -970,3 +970,26 @@ signals. Keep this focused on what was tried and what was learned.
   effect-selected posterior components. The bottleneck is now the consumer: the
   feature-ranking path still cannot distinguish the stronger intervention score
   from random controls, so full benchmark promotion remains premature.
+
+## 2026-05-01: Intervention-Derived Feature Tables
+
+- Added an opt-in feature-table consumer to
+  `scripts/report_waterbirds_patch_flip_probe.py` via
+  `--write-intervention-feature-tables`. The report now applies the selected
+  patch intervention to each split, rebuilds pooled component features, writes
+  per-example metadata (`intervention_effect_drop`, selected mixture component,
+  label/env/group), and screens DFR on six views: `original`, `edited`, `delta`,
+  `original_plus_delta`, `original_plus_edited`, and `all_views`.
+- Limit384, CLS-similarity pooling, 10% patch budget, seed `101`, 10 DFR
+  retrains, 4-component best-of-K mixture, temperature `0.25`, zero replacement:
+  the original component table reached test WGA `0.875` and test accuracy
+  `0.9296875`; edited/suppressed reached WGA `0.875` and accuracy `0.9375`;
+  pure delta fell to WGA `0.78125`; original+delta tied WGA `0.875`; and
+  original+edited reached WGA `0.90625` with accuracy `0.9375`. The larger
+  all-views table fell back to WGA `0.875`.
+- Interpretation: the probe signal survives when DFR can see both the original
+  representation and the counterfactual suppressed representation, but it is
+  diluted or destabilized when passed only as scalar feature scores, pure deltas,
+  or a wide all-views table. This is the first patch-probe downstream lift on
+  the compact Waterbirds/DINO slice, but it is not yet a full-benchmark claim;
+  the next check is seed/limit stability for `original_plus_edited`.

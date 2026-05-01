@@ -8,6 +8,7 @@ from scripts.report_waterbirds_patch_flip_probe import (
     build_component_feature_rows,
     build_component_bundle,
     build_excess_feature_score_rows,
+    build_intervention_feature_variants,
     build_intervention_feature_score_rows,
     compact_official_details,
     component_feature_names,
@@ -264,6 +265,40 @@ def test_build_intervention_feature_score_rows_emits_discovery_schema() -> None:
     assert rows[0]["feature_name"] == "feature_cls_0000"
     assert rows[0]["score"]
     assert rows[0]["strategy"] == "cls_similarity_top"
+
+
+def test_build_intervention_feature_variants_emits_counterfactual_tables() -> None:
+    hidden = {split: torch.randn(2, 5, 2) for split in ("train", "val", "test")}
+    labels = {split: torch.tensor([1, 0]) for split in hidden}
+    groups = {split: torch.tensor([0, 3]) for split in hidden}
+    classifier = OfficialDFRClassifier(
+        weight=torch.tensor([[0.0] * 8, [1.0, 0.0, 0.5, 0.0, -0.5, 0.0, 0.25, 0.0]]),
+        bias=torch.zeros(2),
+        output_dim=2,
+    )
+    probe = PatchFlipMixtureProbe(token_dim=2, component_count=2, hidden_dim=4, initial_mask_probability=0.25)
+
+    bundles, rows_by_variant, feature_names_by_variant = build_intervention_feature_variants(
+        hidden_bundle=HiddenBundle(hidden=hidden, labels=labels, groups=groups),
+        classifier=classifier,
+        pooling="cls_similarity",
+        top_k=1,
+        replacement="zero",
+        strategy="mixture_effect_best_component",
+        probe=probe,
+        budget=0.25,
+    )
+
+    assert bundles["original"].input_dim == 8
+    assert bundles["edited"].input_dim == 8
+    assert bundles["delta"].input_dim == 8
+    assert bundles["original_plus_delta"].input_dim == 16
+    assert bundles["original_plus_edited"].input_dim == 16
+    assert bundles["all_views"].input_dim == 24
+    assert feature_names_by_variant["delta"][0] == "feature_delta_cls_0000"
+    assert rows_by_variant["edited"][0]["split"] == "train"
+    assert "intervention_effect_drop" in rows_by_variant["edited"][0]
+    assert "selected_component_index" in rows_by_variant["edited"][0]
 
 
 def test_build_excess_feature_score_rows_subtracts_control_raw_scores() -> None:

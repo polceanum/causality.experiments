@@ -27,7 +27,7 @@ goal, not incidental development mechanics.
   development signals.
 - `main` is pushed to GitHub.
 - Latest pushed commit before the current working round:
-  - `db4564b` `Add staged Waterbirds sampling`
+  - `1d9e5a5` `Add best-of-K mixture probe objective`
 - The repo contains a runnable PyTorch experiment harness for all 8 paper
   experiments using tiny generated fixtures.
 - Runnable methods:
@@ -472,7 +472,18 @@ goal, not incidental development mechanics.
   effect-selected drop to `0.304`. The gentler mean-replacement run did not
   improve (`0.262` versus `0.267` for mixture NLL), and the best-of-K feature
   scores still tied random in soft-score causal DFR, so this remains a
-  mechanism-level gain.
+  mechanism-level gain. The newest consumer path uses the probe as a feature
+  table generator instead of flattening it to scalar scores:
+  `scripts/report_waterbirds_patch_flip_probe.py --write-intervention-feature-tables`
+  writes original, edited/suppressed, delta, original+delta, original+edited,
+  and all-view component tables, then screens them with the same official DFR
+  protocol. On the limit384 best-of-K zero-replacement diagnostic, the
+  `original_plus_edited` table reached test WGA `0.90625` and test accuracy
+  `0.9375` versus the original component table at test WGA `0.875` and test
+  accuracy `0.9296875`; pure delta fell to WGA `0.78125`, and all-views fell
+  back to `0.875`. This is the first patch-probe downstream lift on this slice,
+  but it is still a diagnostic slice rather than a promotable full benchmark
+  result.
 - The first new Track A configs are:
   - `waterbirds_features_official_adv_representation_dfr_score_gate`
   - `waterbirds_features_official_adv_representation_dfr_nuisance_regularized`

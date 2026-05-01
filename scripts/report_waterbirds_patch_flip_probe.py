@@ -404,6 +404,72 @@ def build_component_feature_rows(hidden_bundle: HiddenBundle, *, pooling: str) -
     return rows, feature_names
 
 
+def _prefixed_feature_names(prefix: str, feature_names: list[str]) -> list[str]:
+    safe_prefix = prefix.strip().lower().replace("-", "_").replace(" ", "_")
+    return [f"feature_{safe_prefix}_{name.removeprefix('feature_')}" for name in feature_names]
+
+
+def _feature_rows_from_matrix(
+    *,
+    split_name: str,
+    matrix: torch.Tensor,
+    feature_names: list[str],
+    labels: torch.Tensor,
+    groups: torch.Tensor,
+    effect_drop: torch.Tensor | None = None,
+    selected_components: torch.Tensor | None = None,
+) -> list[dict[str, Any]]:
+    places = groups // 2
+    rows: list[dict[str, Any]] = []
+    for row_index in range(int(matrix.shape[0])):
+        row: dict[str, Any] = {
+            "split": split_name,
+            "y": int(labels[row_index].item()),
+            "place": int(places[row_index].item()),
+            "group": int(groups[row_index].item()),
+        }
+        if effect_drop is not None:
+            row["intervention_effect_drop"] = float(effect_drop[row_index].item())
+        if selected_components is not None:
+            row["selected_component_index"] = int(selected_components[row_index].item())
+        row.update(
+            {
+                feature_name: float(value)
+                for feature_name, value in zip(feature_names, matrix[row_index].tolist(), strict=True)
+            }
+        )
+        rows.append(row)
+    return rows
+
+
+def _feature_bundle_from_splits(
+    *,
+    name: str,
+    splits: dict[str, torch.Tensor],
+    hidden_bundle: HiddenBundle,
+    feature_names: list[str],
+) -> DatasetBundle:
+    bundle_splits: dict[str, dict[str, torch.Tensor]] = {}
+    for split_name, matrix in splits.items():
+        labels = hidden_bundle.labels[split_name]
+        groups = hidden_bundle.groups[split_name]
+        bundle_splits[split_name] = {
+            "x": matrix.float(),
+            "y": labels.long(),
+            "env": (groups // 2).long(),
+            "group": groups.long(),
+        }
+    return DatasetBundle(
+        name=name,
+        task="classification",
+        splits=bundle_splits,
+        input_dim=len(feature_names),
+        output_dim=2,
+        causal_mask=None,
+        metadata={"fixture": False, "modality": "features", "feature_columns": feature_names},
+    )
+
+
 def official_dfr_config(*, seed: int, retrains: int, device: str) -> dict[str, Any]:
     return {
         "name": "waterbirds_patch_flip_probe_head",
@@ -845,6 +911,177 @@ def evaluate_intervention_strategy(
     return row
 
 
+def intervention_feature_matrices(
+    *,
+    strategy: str,
+    hidden: torch.Tensor,
+    classifier: OfficialDFRClassifier,
+    pooling: str,
+    top_k: int,
+    replacement: str,
+    probe: ProbeModel | None = None,
+    seed: int = 0,
+    prior_selector: str = "none",
+    prior_weight: float = 0.0,
+    budget: float = 0.10,
+    mixture_component_index: int | None = None,
+) -> dict[str, torch.Tensor | None]:
+    original_features = pooled_component_features(hidden, pooling=pooling)
+    baseline_logits = classifier.predict(original_features)
+    selected_components: torch.Tensor | None = None
+    if strategy.strip().lower().replace("-", "_") == "mixture_effect_best_component":
+        if not isinstance(probe, PatchFlipMixtureProbe):
+            raise ValueError("mixture_effect_best_component strategy requires a mixture probe.")
+        mask, selected_components, _ = mixture_effect_best_mask(
+            probe=probe,
+            hidden=hidden,
+            classifier=classifier,
+            pooling=pooling,
+            top_k=top_k,
+            replacement=replacement,
+            prior_selector=prior_selector,
+            prior_weight=prior_weight,
+            budget=budget,
+        )
+    else:
+        mask = _hard_mask_from_strategy(
+            strategy=strategy,
+            hidden=hidden,
+            top_k=top_k,
+            probe=probe,
+            seed=seed,
+            prior_selector=prior_selector,
+            prior_weight=prior_weight,
+            budget=budget,
+            mixture_component_index=mixture_component_index,
+        )
+    edited_hidden = replace_hidden_patch_tokens(hidden.float(), mask, replacement=replacement)
+    edited_features = pooled_component_features(edited_hidden, pooling=pooling)
+    edited_logits = classifier.predict(edited_features)
+    decision_targets = baseline_logits.argmax(dim=1)
+    row_indices = torch.arange(hidden.shape[0])
+    effect_drop = baseline_logits[row_indices, decision_targets] - edited_logits[row_indices, decision_targets]
+    delta_features = original_features - edited_features
+    return {
+        "original": original_features,
+        "edited": edited_features,
+        "delta": delta_features,
+        "original_plus_delta": torch.cat([original_features, delta_features], dim=1),
+        "original_plus_edited": torch.cat([original_features, edited_features], dim=1),
+        "all_views": torch.cat([original_features, edited_features, delta_features], dim=1),
+        "effect_drop": effect_drop.detach().cpu(),
+        "selected_components": selected_components,
+    }
+
+
+def build_intervention_feature_variants(
+    *,
+    hidden_bundle: HiddenBundle,
+    classifier: OfficialDFRClassifier,
+    pooling: str,
+    top_k: int,
+    replacement: str,
+    strategy: str,
+    probe: ProbeModel | None = None,
+    seed: int = 0,
+    prior_selector: str = "none",
+    prior_weight: float = 0.0,
+    budget: float = 0.10,
+    mixture_component_index: int | None = None,
+) -> tuple[dict[str, DatasetBundle], dict[str, list[dict[str, Any]]], dict[str, list[str]]]:
+    base_feature_names = component_feature_names(
+        int(pooled_component_features(hidden_bundle.hidden["train"], pooling=pooling).shape[1]),
+        pooling=pooling,
+    )
+    variant_feature_names = {
+        "original": _prefixed_feature_names("original", base_feature_names),
+        "edited": _prefixed_feature_names("edited", base_feature_names),
+        "delta": _prefixed_feature_names("delta", base_feature_names),
+        "original_plus_delta": [
+            *_prefixed_feature_names("original", base_feature_names),
+            *_prefixed_feature_names("delta", base_feature_names),
+        ],
+        "original_plus_edited": [
+            *_prefixed_feature_names("original", base_feature_names),
+            *_prefixed_feature_names("edited", base_feature_names),
+        ],
+        "all_views": [
+            *_prefixed_feature_names("original", base_feature_names),
+            *_prefixed_feature_names("edited", base_feature_names),
+            *_prefixed_feature_names("delta", base_feature_names),
+        ],
+    }
+    variant_splits: dict[str, dict[str, torch.Tensor]] = {variant: {} for variant in variant_feature_names}
+    variant_rows: dict[str, list[dict[str, Any]]] = {variant: [] for variant in variant_feature_names}
+    for split_offset, split_name in enumerate(("train", "val", "test")):
+        matrices = intervention_feature_matrices(
+            strategy=strategy,
+            hidden=hidden_bundle.hidden[split_name],
+            classifier=classifier,
+            pooling=pooling,
+            top_k=top_k,
+            replacement=replacement,
+            probe=probe,
+            seed=seed + split_offset,
+            prior_selector=prior_selector,
+            prior_weight=prior_weight,
+            budget=budget,
+            mixture_component_index=mixture_component_index,
+        )
+        effect_drop = matrices["effect_drop"]
+        selected_components = matrices["selected_components"]
+        if not isinstance(effect_drop, torch.Tensor):
+            raise TypeError("Expected effect_drop to be a tensor.")
+        selected_tensor = selected_components if isinstance(selected_components, torch.Tensor) else None
+        for variant, feature_names in variant_feature_names.items():
+            matrix = matrices[variant]
+            if not isinstance(matrix, torch.Tensor):
+                raise TypeError(f"Expected matrix for variant {variant!r} to be a tensor.")
+            variant_splits[variant][split_name] = matrix.float()
+            variant_rows[variant].extend(
+                _feature_rows_from_matrix(
+                    split_name=split_name,
+                    matrix=matrix,
+                    feature_names=feature_names,
+                    labels=hidden_bundle.labels[split_name],
+                    groups=hidden_bundle.groups[split_name],
+                    effect_drop=effect_drop,
+                    selected_components=selected_tensor,
+                )
+            )
+    bundles = {
+        variant: _feature_bundle_from_splits(
+            name=f"waterbirds_patch_{variant}",
+            splits=splits,
+            hidden_bundle=hidden_bundle,
+            feature_names=variant_feature_names[variant],
+        )
+        for variant, splits in variant_splits.items()
+    }
+    return bundles, variant_rows, variant_feature_names
+
+
+def evaluate_feature_variant_bundles(
+    *,
+    bundles: dict[str, DatasetBundle],
+    config: dict[str, Any],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for variant, bundle in bundles.items():
+        classifier = fit_method(bundle, config)
+        rows.append(
+            {
+                "variant": variant,
+                "input_dim": int(bundle.input_dim),
+                "val_accuracy": accuracy(classifier, bundle.split("val")),
+                "val_wga": worst_group_accuracy(classifier, bundle.split("val")),
+                "test_accuracy": accuracy(classifier, bundle.split("test")),
+                "test_wga": worst_group_accuracy(classifier, bundle.split("test")),
+            }
+        )
+    return rows
+
+
 def select_mixture_component_by_validation(
     *,
     probe: PatchFlipMixtureProbe,
@@ -1042,6 +1279,12 @@ def main() -> None:
     parser.add_argument("--probe-prior-weight", type=float, default=0.0)
     parser.add_argument("--replacement", default="mean", choices=("zero", "mean"))
     parser.add_argument("--target-mode", default="prediction", choices=("prediction", "label"))
+    parser.add_argument("--write-intervention-feature-tables", action="store_true")
+    parser.add_argument(
+        "--intervention-feature-strategy",
+        default="mixture_effect_best_component",
+        choices=("learned_probe", "mixture_marginal", "mixture_map_component", "mixture_val_best_component", "mixture_effect_best_component"),
+    )
     parser.add_argument("--out-dir", default="outputs/dfr_sweeps/patch_flip_probe_limit384")
     args = parser.parse_args()
 
@@ -1193,12 +1436,61 @@ def main() -> None:
         strategy=f"{primary_score_key}_excess_random",
     )
     component_rows, feature_names = build_component_feature_rows(hidden_bundle, pooling=args.pooling)
+    intervention_feature_rows: list[dict[str, Any]] = []
+    intervention_feature_paths: dict[str, str] = {}
+    intervention_feature_dfr_rows: list[dict[str, Any]] = []
     out_dir = Path(args.out_dir)
     _write_rows(out_dir / "intervention_rows.csv", rows)
     if validation_component_rows:
         _write_rows(out_dir / "validation_component_rows.csv", validation_component_rows)
     _write_rows(out_dir / "training_history.csv", _float_rows(history))
     _write_rows(out_dir / "component_features.csv", component_rows, fieldnames=["split", "y", "place", "group", *feature_names])
+    if args.write_intervention_feature_tables:
+        variant_bundles, variant_rows, variant_feature_names = build_intervention_feature_variants(
+            hidden_bundle=hidden_bundle,
+            classifier=classifier,
+            pooling=args.pooling,
+            top_k=top_k,
+            replacement=args.replacement,
+            strategy=args.intervention_feature_strategy,
+            probe=probe,
+            seed=args.seed,
+            prior_selector=args.probe_prior_selector,
+            prior_weight=args.probe_prior_weight,
+            budget=float(args.mask_fraction),
+            mixture_component_index=mixture_best_component_index
+            if args.intervention_feature_strategy == "mixture_val_best_component"
+            else None,
+        )
+        intervention_feature_dfr_rows = evaluate_feature_variant_bundles(bundles=variant_bundles, config=config)
+        for variant, rows_for_variant in variant_rows.items():
+            path = out_dir / f"intervention_features_{variant}.csv"
+            _write_rows(
+                path,
+                rows_for_variant,
+                fieldnames=[
+                    "split",
+                    "y",
+                    "place",
+                    "group",
+                    "intervention_effect_drop",
+                    "selected_component_index",
+                    *variant_feature_names[variant],
+                ],
+            )
+            intervention_feature_paths[variant] = str(path)
+        _write_rows(out_dir / "intervention_feature_dfr_rows.csv", intervention_feature_dfr_rows)
+        intervention_feature_rows = [
+            {
+                "variant": row["variant"],
+                "input_dim": row["input_dim"],
+                "test_wga": row["test_wga"],
+                "test_accuracy": row["test_accuracy"],
+                "val_wga": row["val_wga"],
+                "val_accuracy": row["val_accuracy"],
+            }
+            for row in intervention_feature_dfr_rows
+        ]
     score_paths: dict[str, str] = {}
     for strategy, score_rows in score_rows_by_strategy.items():
         score_path = out_dir / f"feature_scores_{strategy}.csv"
@@ -1208,6 +1500,9 @@ def main() -> None:
         "baseline": baseline,
         "component_features": str(out_dir / "component_features.csv"),
         "feature_score_paths": score_paths,
+        "intervention_feature_paths": intervention_feature_paths,
+        "intervention_feature_dfr_rows": str(out_dir / "intervention_feature_dfr_rows.csv") if intervention_feature_dfr_rows else "",
+        "intervention_feature_summary": intervention_feature_rows,
         "intervention_rows": str(out_dir / "intervention_rows.csv"),
         "validation_component_rows": str(out_dir / "validation_component_rows.csv") if validation_component_rows else "",
         "mixture_best_component_index": mixture_best_component_index,
