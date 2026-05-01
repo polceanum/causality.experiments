@@ -860,6 +860,22 @@ signals. Keep this focused on what was tried and what was learned.
   test specs, untested clue rows, training traces, and a manifest without
   calling hosted models or reviving the pruned patch-probe machinery.
 - Interpretation: this is infrastructure for learning which proposed probes are
-  worth running, not yet a Waterbirds improvement. The next layer is
-  deterministic feature-level counterfactual test execution plus replay/local
-  LLM backends, followed by held-out bridge-ranker evaluation.
+  worth running, not yet a Waterbirds improvement. The planned next layers are
+  deterministic feature-level counterfactual test execution, replay/local LLM
+  backends, and held-out bridge-ranker evaluation.
+
+## 2026-05-01: Deterministic LLM-Clue Test Execution
+
+- Added `counterfactual_clue_tests`, the first deterministic executor for the
+  LLM-guided clue bridge. It runs feature mean/zero/shrink edits, same-label
+  different-environment donor swaps, different-label same-environment donor
+  swaps, and conditional signal checks, with deterministic random-feature
+  controls and measured model/logit effects when a fitted model is available.
+- Updated the LLM clue-probe runner so mock-planned test specs are executed by
+  default against the configured method. The runner now writes `test_results.csv`
+  and tested clue rows, and bridge traces receive nonzero `test_value` and
+  `score_delta` labels when effects beat controls.
+- Interpretation: the bridge can now start collecting empirical supervision for
+  which LLM-proposed probe actions are useful. This remains fixture-safe
+  infrastructure; Waterbirds use should begin with diagnostics and controls,
+  not downstream promotion.

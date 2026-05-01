@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from causality_experiments.counterfactual_clue_tests import clue_rows_from_test_results, execute_clue_tests
 from causality_experiments.data import load_dataset
 from causality_experiments.latent_clue_packets import build_latent_clue_packets, packets_to_jsonl
 from causality_experiments.llm_clue_bridge import build_bridge_training_rows, hypothesis_label_from_packet
@@ -135,6 +136,28 @@ def test_bridge_training_rows_create_targets_from_packets_and_results(tmp_path: 
     assert by_feature["background_0"]["target_hypothesis_label"] == "nuisance"
 
 
+def test_counterfactual_clue_tests_execute_model_effects_and_controls(tmp_path: Path) -> None:
+    csv_path = tmp_path / "features.csv"
+    _write_waterbirds_features(csv_path)
+    bundle = _load_bundle(csv_path)
+    packets = build_latent_clue_packets(bundle, top_k=2)
+    plan = plan_from_backend(packets, MockCluePlannerBackend(), max_packets=3)
+
+    from causality_experiments.methods import fit_method
+
+    model = fit_method(bundle, {"method": {"kind": "oracle"}})
+    results = execute_clue_tests(bundle, plan.tests, packets=packets, model=model, split_name="test")
+
+    by_feature = {str(row["feature_name"]): row for row in results}
+    bird = by_feature["bird_shape_0"]
+    assert bird["test_effect_label_delta"] > bird["test_random_control_delta"]
+    assert bird["test_passed_control"] is True
+    clue_rows = clue_rows_from_test_results(results)
+    by_clue = {str(row["feature_name"]): row for row in clue_rows}
+    assert by_clue["bird_shape_0"]["llm_untested"] == "0"
+    assert by_clue["bird_shape_0"]["test_passed_control"] == "1"
+
+
 def test_llm_counterfactual_clue_probe_runner_writes_replayable_artifacts(tmp_path: Path) -> None:
     csv_path = tmp_path / "features.csv"
     _write_waterbirds_features(csv_path)
@@ -142,11 +165,14 @@ def test_llm_counterfactual_clue_probe_runner_writes_replayable_artifacts(tmp_pa
     config_path.write_text(
         "\n".join(
             [
+                "name: llm_probe_test",
                 "dataset:",
                 "  kind: waterbirds_features",
                 f"  path: {csv_path}",
                 "  causal_feature_columns:",
                 "    - bird_shape_0",
+                "method:",
+                "  kind: oracle",
             ]
         ),
         encoding="utf-8",
@@ -159,7 +185,8 @@ def test_llm_counterfactual_clue_probe_runner_writes_replayable_artifacts(tmp_pa
         max_packets=3,
     )
 
-    for key in ("cards", "latent_clue_packets", "hypotheses", "test_specs", "training_traces", "llm_clues", "manifest"):
+    for key in ("cards", "latent_clue_packets", "hypotheses", "test_specs", "test_results", "training_traces", "llm_clues", "manifest"):
         assert Path(manifest[key]).exists()
     assert Path(manifest["latent_clue_packets"]).read_text(encoding="utf-8").strip()
     assert Path(manifest["training_traces"]).read_text(encoding="utf-8").strip()
+    assert "test_passed_control" in Path(manifest["llm_clues"]).read_text(encoding="utf-8")
