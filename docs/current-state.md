@@ -444,7 +444,18 @@ goal, not incidental development mechanics.
   mean replacement (`0.243` versus `0.223` for CLS-top and `0.133` random) and
   zero replacement (`0.269` versus `0.239` for CLS-top and `0.087` random), but
   flip-rate and accuracy movement remained small. This validates active probing
-  as an evidence generator, not yet a benchmark-improving intervention.
+  as an evidence generator, not yet a benchmark-improving intervention. The
+  probe report now also emits component feature tables and discovery-compatible
+  `feature_name,score` CSVs. A first downstream screen on the limit384 component
+  table found that official causal-shrink stayed at `0.875` WGA for learned,
+  heuristic, and random supports, while soft-score causal DFR reached `0.90625`
+  for both learned and random supports. Inspired by Distribution Transformers'
+  prior-adaptive posterior updates, the runner can now inject CLS-similarity,
+  token-norm, or mixed patch priors into the learned mask logits; a simple
+  additive CLS prior did not improve the probe (`0.236`-`0.239` decision-logit
+  drop versus `0.246` prior-free), so the more promising adaptation is a
+  multi-hypothesis/uncertainty-aware posterior over masks rather than a single
+  prior-biased mask head.
 - The first new Track A configs are:
   - `waterbirds_features_official_adv_representation_dfr_score_gate`
   - `waterbirds_features_official_adv_representation_dfr_nuisance_regularized`

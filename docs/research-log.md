@@ -882,3 +882,37 @@ signals. Keep this focused on what was tried and what was learned.
   itself as the final method.
 - Verification: focused patch/report/feature tests passed with `32 passed`; the
   full regression suite passed with `151 passed`.
+
+## 2026-05-01: Patch Probe Scores and Prior Adaptation
+
+- Extended `scripts/report_waterbirds_patch_flip_probe.py` so the active probe
+  emits a component feature table and discovery-compatible feature score CSVs
+  for learned, learned-minus-random, CLS-top, CLS-bottom, token-norm, and random
+  patch interventions. The score is an attribution-style estimate of how much
+  each edited component feature contributes to dropping the frozen model's
+  original decision logit.
+- Fed the generated limit384 component table and learned probe scores into
+  existing score consumers. Official causal-shrink DFR tied the baseline at test
+  WGA `0.875` for learned top-64/top-128, heuristic controls, and random
+  controls; learned/excess-random supports slightly reduced test accuracy to
+  `0.921875` while controls stayed at `0.9296875`. Soft-score causal DFR reached
+  test WGA `0.90625` and test accuracy `0.953125`, but learned and random
+  supports tied exactly at top-64/top-128, so this consumer is not reading a
+  discriminative ranking from the current score export.
+- Read Distribution Transformers (arXiv:2502.02463) as a mechanism prompt. The
+  most relevant idea is prior-flexible amortized updating: represent a prior,
+  condition on observations, and output a posterior in the same family so the
+  posterior can become the next prior. A lightweight transfer is now implemented:
+  the patch-flip runner can add normalized CLS-similarity, token-norm, or mixed
+  patch priors to the learned probe logits before the hard top-k mask is formed.
+- The simple additive-prior diagnostic did not improve the active probe. On the
+  same limit384 mean-replacement setup, CLS prior weight `0.5` produced learned
+  decision-logit drop `0.239`, and weight `0.1` produced `0.236`, both below the
+  prior-free learned probe at `0.246` though still above passive CLS-top at
+  `0.223`.
+- Interpretation: prior adaptation is the right conceptual direction, but the
+  current single-head additive prior is too restrictive. The next paper-inspired
+  version should keep multiple posterior mask hypotheses, with per-hypothesis
+  weights/uncertainty and diversity, then select by posterior marginal or
+  risk-adjusted expected effect. That would better match the paper's
+  distribution-to-distribution update than a scalar prior bias.

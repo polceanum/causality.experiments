@@ -4,6 +4,7 @@ import argparse
 import csv
 from dataclasses import dataclass
 import json
+import math
 from pathlib import Path
 import sys
 from typing import Any
@@ -39,6 +40,7 @@ from scripts.prepare_waterbirds_features import (
     ensure_downloaded,
     ensure_extracted,
     load_metadata,
+    _feature_columns_for_components,
     _hf_patch_component_features,
 )
 
@@ -50,16 +52,75 @@ class HiddenBundle:
     groups: dict[str, torch.Tensor]
 
 
-def _write_rows(path: Path, rows: list[dict[str, Any]]) -> None:
+def _write_rows(path: Path, rows: list[dict[str, Any]], *, fieldnames: list[str] | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if not rows:
         path.write_text("", encoding="utf-8")
         return
-    keys = sorted({key for row in rows for key in row})
+    keys = fieldnames or sorted({key for row in rows for key in row})
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=keys)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _component_names_for_pooling(pooling: str) -> list[str]:
+    key = pooling.strip().lower().replace("-", "_")
+    if key in {"center_background", "patch_center_background", "patch_components"}:
+        return ["cls", "center", "background", "center_minus_background"]
+    if key in {"cls_similarity", "patch_cls_similarity", "patch_cls_components"}:
+        return ["cls", "foreground", "background", "foreground_minus_background"]
+    if key in {"token_norm", "patch_token_norm", "patch_norm_components"}:
+        return ["cls", "foreground", "background", "foreground_minus_background"]
+    raise ValueError("Patch component pooling must be one of: center_background, cls_similarity, token_norm.")
+
+
+def component_feature_names(feature_dim: int, *, pooling: str) -> list[str]:
+    columns, _ = _feature_columns_for_components(feature_dim, _component_names_for_pooling(pooling))
+    return columns
+
+
+def _row_minmax_unit(values: torch.Tensor) -> torch.Tensor:
+    minimum = values.min(dim=1, keepdim=True).values
+    maximum = values.max(dim=1, keepdim=True).values
+    width = maximum - minimum
+    return torch.where(width > 1e-12, (values - minimum) / width.clamp_min(1e-12), torch.full_like(values, 0.5))
+
+
+def normalized_patch_prior_scores(hidden: torch.Tensor, selector: str) -> torch.Tensor:
+    key = selector.strip().lower().replace("-", "_")
+    if key in {"", "none", "uniform"}:
+        return torch.full(hidden.shape[:2][0:1] + (hidden.shape[1] - 1,), 0.5, dtype=hidden.dtype, device=hidden.device)
+    if key == "mixed":
+        cls_scores = _row_minmax_unit(patch_selector_scores(hidden, "cls_similarity"))
+        norm_scores = _row_minmax_unit(patch_selector_scores(hidden, "token_norm"))
+        return 0.5 * (cls_scores + norm_scores)
+    if key in {"cls_similarity", "token_norm"}:
+        return _row_minmax_unit(patch_selector_scores(hidden, key))
+    raise ValueError("Patch prior selector must be one of: none, cls_similarity, token_norm, mixed.")
+
+
+def patch_prior_logit_offset(hidden: torch.Tensor, *, selector: str, budget: float) -> torch.Tensor:
+    scores = normalized_patch_prior_scores(hidden, selector)
+    eps = 1e-4
+    probabilities = scores.clamp(eps, 1.0 - eps)
+    budget_probability = min(max(float(budget), eps), 1.0 - eps)
+    offset = torch.logit(probabilities) - math.log(budget_probability / (1.0 - budget_probability))
+    return offset - offset.mean(dim=1, keepdim=True)
+
+
+def adapted_probe_logits(
+    probe: PatchFlipProbe,
+    hidden: torch.Tensor,
+    *,
+    prior_selector: str,
+    prior_weight: float,
+    budget: float,
+) -> torch.Tensor:
+    logits = probe(hidden)
+    if float(prior_weight) == 0.0 or prior_selector.strip().lower() in {"", "none", "uniform"}:
+        return logits
+    return logits + float(prior_weight) * patch_prior_logit_offset(hidden, selector=prior_selector, budget=budget)
 
 
 def _flatten_summary(prefix: str, summary: dict[str, Any]) -> dict[str, Any]:
@@ -131,6 +192,7 @@ def pooled_component_features(hidden: torch.Tensor, *, pooling: str) -> torch.Te
 
 
 def build_component_bundle(hidden_bundle: HiddenBundle, *, pooling: str) -> DatasetBundle:
+    feature_names: list[str] = []
     splits: dict[str, dict[str, torch.Tensor]] = {}
     input_dim = 0
     output_dim = 2
@@ -140,6 +202,8 @@ def build_component_bundle(hidden_bundle: HiddenBundle, *, pooling: str) -> Data
         groups = hidden_bundle.groups[split_name]
         input_dim = int(x.shape[1])
         output_dim = max(output_dim, int(y.max().item()) + 1)
+        if not feature_names:
+            feature_names = component_feature_names(input_dim, pooling=pooling)
         splits[split_name] = {
             "x": x.float(),
             "y": y.long(),
@@ -153,8 +217,39 @@ def build_component_bundle(hidden_bundle: HiddenBundle, *, pooling: str) -> Data
         input_dim=input_dim,
         output_dim=output_dim,
         causal_mask=None,
-        metadata={"fixture": False, "modality": "features", "patch_pooling": pooling},
+        metadata={
+            "fixture": False,
+            "modality": "features",
+            "patch_pooling": pooling,
+            "feature_columns": feature_names,
+        },
     )
+
+
+def build_component_feature_rows(hidden_bundle: HiddenBundle, *, pooling: str) -> tuple[list[dict[str, Any]], list[str]]:
+    first_features = pooled_component_features(hidden_bundle.hidden["train"], pooling=pooling)
+    feature_names = component_feature_names(int(first_features.shape[1]), pooling=pooling)
+    rows: list[dict[str, Any]] = []
+    for split_name in ("train", "val", "test"):
+        features = first_features if split_name == "train" else pooled_component_features(hidden_bundle.hidden[split_name], pooling=pooling)
+        labels = hidden_bundle.labels[split_name]
+        groups = hidden_bundle.groups[split_name]
+        places = groups // 2
+        for row_index in range(int(features.shape[0])):
+            row: dict[str, Any] = {
+                "split": split_name,
+                "y": int(labels[row_index].item()),
+                "place": int(places[row_index].item()),
+                "group": int(groups[row_index].item()),
+            }
+            row.update(
+                {
+                    feature_name: float(value)
+                    for feature_name, value in zip(feature_names, features[row_index].tolist(), strict=True)
+                }
+            )
+            rows.append(row)
+    return rows, feature_names
 
 
 def official_dfr_config(*, seed: int, retrains: int, device: str) -> dict[str, Any]:
@@ -191,6 +286,8 @@ def train_patch_flip_probe(
     budget_weight: float,
     entropy_weight: float,
     hidden_dim: int,
+    prior_selector: str,
+    prior_weight: float,
 ) -> tuple[PatchFlipProbe, list[dict[str, float]]]:
     torch.manual_seed(seed)
     probe = PatchFlipProbe(int(hidden_train.shape[2]), hidden_dim=hidden_dim, initial_mask_probability=budget)
@@ -207,7 +304,14 @@ def train_patch_flip_probe(
         probe.train()
         for hidden_batch, _, target_batch in loader:
             optimizer.zero_grad(set_to_none=True)
-            mask_weights = soft_patch_mask(probe(hidden_batch), temperature=temperature)
+            mask_logits = adapted_probe_logits(
+                probe,
+                hidden_batch,
+                prior_selector=prior_selector,
+                prior_weight=prior_weight,
+                budget=budget,
+            )
+            mask_weights = soft_patch_mask(mask_logits, temperature=temperature)
             edited_hidden = replace_hidden_patch_tokens_soft(hidden_batch, mask_weights, replacement=replacement)
             edited_features = _hf_patch_component_features(edited_hidden, pooling=pooling)
             edited_logits = classifier.predict(edited_features)
@@ -237,6 +341,9 @@ def _hard_mask_from_strategy(
     top_k: int,
     probe: PatchFlipProbe | None,
     seed: int,
+    prior_selector: str = "none",
+    prior_weight: float = 0.0,
+    budget: float = 0.10,
 ) -> torch.Tensor:
     key = strategy.strip().lower()
     if key == "learned_probe":
@@ -244,7 +351,13 @@ def _hard_mask_from_strategy(
             raise ValueError("learned_probe strategy requires a trained probe.")
         probe.eval()
         with torch.inference_mode():
-            scores = probe(hidden.float())
+            scores = adapted_probe_logits(
+                probe,
+                hidden.float(),
+                prior_selector=prior_selector,
+                prior_weight=prior_weight,
+                budget=budget,
+            )
         return topk_patch_mask(scores, top_k=top_k, largest=True)
     if key == "cls_similarity_top":
         return topk_patch_mask(patch_selector_scores(hidden, "cls_similarity"), top_k=top_k, largest=True)
@@ -270,10 +383,22 @@ def evaluate_intervention_strategy(
     replacement: str,
     probe: PatchFlipProbe | None = None,
     seed: int = 0,
+    prior_selector: str = "none",
+    prior_weight: float = 0.0,
+    budget: float = 0.10,
 ) -> dict[str, Any]:
     baseline_features = pooled_component_features(hidden, pooling=pooling)
     baseline_logits = classifier.predict(baseline_features)
-    mask = _hard_mask_from_strategy(strategy=strategy, hidden=hidden, top_k=top_k, probe=probe, seed=seed)
+    mask = _hard_mask_from_strategy(
+        strategy=strategy,
+        hidden=hidden,
+        top_k=top_k,
+        probe=probe,
+        seed=seed,
+        prior_selector=prior_selector,
+        prior_weight=prior_weight,
+        budget=budget,
+    )
     edited_hidden = replace_hidden_patch_tokens(hidden.float(), mask, replacement=replacement)
     edited_features = pooled_component_features(edited_hidden, pooling=pooling)
     edited_logits = classifier.predict(edited_features)
@@ -295,6 +420,100 @@ def evaluate_intervention_strategy(
     row.update(_flatten_summary("label", label_summary))
     row.update(_flatten_summary("decision", decision_summary))
     return row
+
+
+def _target_feature_weights(classifier: OfficialDFRClassifier, targets: torch.Tensor) -> torch.Tensor:
+    weights = classifier.weight.float()
+    targets = targets.long()
+    if classifier.output_dim == 2 and weights.shape[0] == 1:
+        signs = torch.where(targets == 1, 1.0, -1.0).to(dtype=weights.dtype)
+        return signs[:, None] * weights[0][None, :]
+    return weights[targets]
+
+
+def _normalise_positive_scores(values: torch.Tensor) -> torch.Tensor:
+    values = values.float().clamp_min(0.0)
+    maximum = values.max().clamp_min(1e-12)
+    if float(maximum.item()) <= 1e-12:
+        return torch.zeros_like(values)
+    return values / maximum
+
+
+def build_intervention_feature_score_rows(
+    *,
+    strategy: str,
+    hidden: torch.Tensor,
+    classifier: OfficialDFRClassifier,
+    pooling: str,
+    top_k: int,
+    replacement: str,
+    probe: PatchFlipProbe | None = None,
+    seed: int = 0,
+    dataset_name: str = "waterbirds_patch_components",
+    prior_selector: str = "none",
+    prior_weight: float = 0.0,
+    budget: float = 0.10,
+) -> list[dict[str, Any]]:
+    baseline_features = pooled_component_features(hidden, pooling=pooling)
+    baseline_logits = classifier.predict(baseline_features)
+    decision_targets = baseline_logits.argmax(dim=1)
+    mask = _hard_mask_from_strategy(
+        strategy=strategy,
+        hidden=hidden,
+        top_k=top_k,
+        probe=probe,
+        seed=seed,
+        prior_selector=prior_selector,
+        prior_weight=prior_weight,
+        budget=budget,
+    )
+    edited_hidden = replace_hidden_patch_tokens(hidden.float(), mask, replacement=replacement)
+    edited_features = pooled_component_features(edited_hidden, pooling=pooling)
+    target_weights = _target_feature_weights(classifier, decision_targets)
+    contributions = (baseline_features - edited_features) * target_weights
+    positive_drop = contributions.clamp_min(0.0).mean(dim=0)
+    mean_drop = contributions.mean(dim=0)
+    mean_abs_delta = contributions.abs().mean(dim=0)
+    scores = _normalise_positive_scores(positive_drop)
+    feature_names = component_feature_names(int(baseline_features.shape[1]), pooling=pooling)
+    return [
+        {
+            "dataset": dataset_name,
+            "feature_index": feature_index,
+            "feature_name": feature_name,
+            "score": f"{float(scores[feature_index].item()):.6f}",
+            "raw_score": f"{float(positive_drop[feature_index].item()):.9f}",
+            "mean_target_logit_drop": f"{float(mean_drop[feature_index].item()):.9f}",
+            "mean_abs_target_logit_delta": f"{float(mean_abs_delta[feature_index].item()):.9f}",
+            "strategy": strategy,
+            "replacement": replacement,
+            "top_k": int(top_k),
+        }
+        for feature_index, feature_name in enumerate(feature_names)
+    ]
+
+
+def build_excess_feature_score_rows(
+    primary_rows: list[dict[str, Any]],
+    control_rows: list[dict[str, Any]],
+    *,
+    strategy: str,
+) -> list[dict[str, Any]]:
+    control_by_name = {str(row["feature_name"]): row for row in control_rows}
+    excess_values: list[float] = []
+    for row in primary_rows:
+        control = control_by_name.get(str(row["feature_name"]))
+        control_score = 0.0 if control is None else float(control.get("raw_score", 0.0))
+        excess_values.append(max(float(row.get("raw_score", 0.0)) - control_score, 0.0))
+    normalised = _normalise_positive_scores(torch.tensor(excess_values, dtype=torch.float32))
+    rows: list[dict[str, Any]] = []
+    for index, row in enumerate(primary_rows):
+        output = dict(row)
+        output["score"] = f"{float(normalised[index].item()):.6f}"
+        output["raw_score"] = f"{excess_values[index]:.9f}"
+        output["strategy"] = strategy
+        rows.append(output)
+    return rows
 
 
 def compact_official_details(classifier: OfficialDFRClassifier) -> dict[str, Any]:
@@ -335,6 +554,8 @@ def main() -> None:
     parser.add_argument("--sparsity-weight", type=float, default=0.0)
     parser.add_argument("--budget-weight", type=float, default=20.0)
     parser.add_argument("--entropy-weight", type=float, default=0.001)
+    parser.add_argument("--probe-prior-selector", default="none", choices=("none", "cls_similarity", "token_norm", "mixed"))
+    parser.add_argument("--probe-prior-weight", type=float, default=0.0)
     parser.add_argument("--replacement", default="mean", choices=("zero", "mean"))
     parser.add_argument("--target-mode", default="prediction", choices=("prediction", "label"))
     parser.add_argument("--out-dir", default="outputs/dfr_sweeps/patch_flip_probe_limit384")
@@ -387,6 +608,8 @@ def main() -> None:
         budget_weight=args.budget_weight,
         entropy_weight=args.entropy_weight,
         hidden_dim=args.probe_hidden_dim,
+        prior_selector=args.probe_prior_selector,
+        prior_weight=args.probe_prior_weight,
     )
     rows = [
         evaluate_intervention_strategy(
@@ -400,16 +623,51 @@ def main() -> None:
             replacement=args.replacement,
             probe=probe,
             seed=args.seed + offset,
+            prior_selector=args.probe_prior_selector,
+            prior_weight=args.probe_prior_weight,
+            budget=float(args.mask_fraction),
         )
         for offset, strategy in enumerate(
             ["learned_probe", "cls_similarity_top", "cls_similarity_bottom", "token_norm_top", "random"]
         )
     ]
+    score_rows_by_strategy = {
+        strategy: build_intervention_feature_score_rows(
+            strategy=strategy,
+            hidden=hidden_bundle.hidden["test"],
+            classifier=classifier,
+            pooling=args.pooling,
+            top_k=top_k,
+            replacement=args.replacement,
+            probe=probe,
+            seed=args.seed + offset,
+            prior_selector=args.probe_prior_selector,
+            prior_weight=args.probe_prior_weight,
+            budget=float(args.mask_fraction),
+        )
+        for offset, strategy in enumerate(
+            ["learned_probe", "cls_similarity_top", "cls_similarity_bottom", "token_norm_top", "random"]
+        )
+    }
+    score_rows_by_strategy["learned_probe_excess_random"] = build_excess_feature_score_rows(
+        score_rows_by_strategy["learned_probe"],
+        score_rows_by_strategy["random"],
+        strategy="learned_probe_excess_random",
+    )
+    component_rows, feature_names = build_component_feature_rows(hidden_bundle, pooling=args.pooling)
     out_dir = Path(args.out_dir)
     _write_rows(out_dir / "intervention_rows.csv", rows)
     _write_rows(out_dir / "training_history.csv", _float_rows(history))
+    _write_rows(out_dir / "component_features.csv", component_rows, fieldnames=["split", "y", "place", "group", *feature_names])
+    score_paths: dict[str, str] = {}
+    for strategy, score_rows in score_rows_by_strategy.items():
+        score_path = out_dir / f"feature_scores_{strategy}.csv"
+        _write_rows(score_path, score_rows)
+        score_paths[strategy] = str(score_path)
     manifest = {
         "baseline": baseline,
+        "component_features": str(out_dir / "component_features.csv"),
+        "feature_score_paths": score_paths,
         "intervention_rows": str(out_dir / "intervention_rows.csv"),
         "training_history": str(out_dir / "training_history.csv"),
         "args": vars(args),

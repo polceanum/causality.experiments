@@ -61,6 +61,7 @@ def _build_candidate(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-config", required=True, help="Benchmark config used as the downstream run template.")
+    parser.add_argument("--dataset-path", help="Optional dataset feature table override for all candidates.")
     parser.add_argument("--full-scores", required=True, help="Discovery score CSV without support restriction.")
     parser.add_argument("--restricted-scores", help="Discovery score CSV restricted to the heuristic support.")
     parser.add_argument("--include-heuristic", action="store_true", help="Include a matched-cardinality heuristic-correlation control for each top-k.")
@@ -70,6 +71,8 @@ def main() -> None:
     args = parser.parse_args()
 
     base_config = load_config(Path(args.base_config))
+    if args.dataset_path:
+        base_config.setdefault("dataset", {})["path"] = args.dataset_path
     candidates: list[dict[str, str | float | int]] = []
     variant_specs: list[tuple[str, str | None]] = [("discovery_full", args.full_scores)]
     if args.restricted_scores:
