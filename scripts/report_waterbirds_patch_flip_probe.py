@@ -492,6 +492,11 @@ def _mixture_probe_loss(
     mask_weights: torch.Tensor,
     component_logits: torch.Tensor,
     *,
+    baseline_logits: torch.Tensor | None = None,
+    mixture_objective: str = "nll",
+    mixture_effect_weight: float = 1.0,
+    mixture_routing_weight: float = 0.1,
+    mixture_best_of_k_temperature: float = 1.0,
     sparsity_weight: float,
     budget: float,
     budget_weight: float,
@@ -520,6 +525,38 @@ def _mixture_probe_loss(
         dim=1,
     ).mean()
     expected_flip_loss = (component_weights.detach() * per_component_losses).sum(dim=1).mean()
+    best_indices = per_component_losses.argmin(dim=1)
+    selected_flip_loss = per_component_losses.gather(1, best_indices[:, None]).squeeze(1).mean()
+    best_effect_drop = edited_logits_by_component.new_tensor(0.0)
+    routing_loss = edited_logits_by_component.new_tensor(0.0)
+    if baseline_logits is not None:
+        baseline = baseline_logits.to(device=edited_logits_by_component.device, dtype=edited_logits_by_component.dtype)
+        if baseline.shape != edited_logits_by_component.shape[:1] + edited_logits_by_component.shape[2:]:
+            raise ValueError("baseline_logits must have shape [batch, classes].")
+        decision_targets = baseline.detach().argmax(dim=1)
+        row_indices = torch.arange(baseline.shape[0], device=baseline.device)
+        baseline_targets = baseline[row_indices, decision_targets]
+        target_index = decision_targets[:, None, None].expand(-1, component_count, 1)
+        edited_targets = edited_logits_by_component.gather(2, target_index).squeeze(2)
+        effect_drops = baseline_targets[:, None] - edited_targets
+        best_indices = effect_drops.argmax(dim=1)
+        best_effect_drop = effect_drops.gather(1, best_indices[:, None]).squeeze(1).mean()
+        selected_flip_loss = per_component_losses.gather(1, best_indices[:, None]).squeeze(1).mean()
+    objective_key = mixture_objective.strip().lower().replace("-", "_")
+    if objective_key == "nll":
+        objective_loss = mixture_flip_loss
+    elif objective_key in {"best_of_k", "best", "min"}:
+        temperature = max(float(mixture_best_of_k_temperature), 1e-6)
+        objective_loss = (-temperature * torch.logsumexp(-per_component_losses / temperature, dim=1)).mean()
+    elif objective_key in {"effect_best", "best_effect"}:
+        if baseline_logits is None:
+            raise ValueError("effect_best mixture objective requires baseline_logits.")
+        objective_loss = selected_flip_loss - float(mixture_effect_weight) * best_effect_drop
+        if mixture_routing_weight > 0.0:
+            routing_loss = torch.nn.functional.cross_entropy(component_logits, best_indices.detach())
+            objective_loss = objective_loss + float(mixture_routing_weight) * routing_loss
+    else:
+        raise ValueError("mixture_objective must be one of: nll, best_of_k, effect_best.")
     weights = mask_weights.float().clamp(1e-6, 1.0 - 1e-6)
     expected_mask = (component_weights[:, :, None] * weights).sum(dim=1)
     sparsity_loss = expected_mask.mean()
@@ -527,7 +564,7 @@ def _mixture_probe_loss(
     mask_entropy_loss = -(weights * weights.log() + (1.0 - weights) * (1.0 - weights).log()).mean()
     mixture_entropy = -(component_weights.clamp_min(1e-8) * component_weights.clamp_min(1e-8).log()).sum(dim=1).mean()
     diversity_loss = mixture_component_diversity_loss(weights)
-    loss = mixture_flip_loss + float(sparsity_weight) * sparsity_loss + float(budget_weight) * budget_loss
+    loss = objective_loss + float(sparsity_weight) * sparsity_loss + float(budget_weight) * budget_loss
     if entropy_weight > 0.0:
         loss = loss + float(entropy_weight) * mask_entropy_loss
     if mixture_diversity_weight > 0.0:
@@ -536,6 +573,10 @@ def _mixture_probe_loss(
         loss = loss - float(mixture_entropy_weight) * mixture_entropy
     return loss, {
         "flip_loss": float(mixture_flip_loss.detach().cpu().item()),
+        "objective_loss": float(objective_loss.detach().cpu().item()),
+        "selected_flip_loss": float(selected_flip_loss.detach().cpu().item()),
+        "best_effect_drop": float(best_effect_drop.detach().cpu().item()),
+        "routing_loss": float(routing_loss.detach().cpu().item()),
         "expected_flip_loss": float(expected_flip_loss.detach().cpu().item()),
         "sparsity_loss": float(sparsity_loss.detach().cpu().item()),
         "budget_loss": float(budget_loss.detach().cpu().item()),
@@ -567,6 +608,10 @@ def train_patch_flip_mixture_probe(
     prior_selector: str,
     prior_weight: float,
     component_count: int,
+    mixture_objective: str,
+    mixture_effect_weight: float,
+    mixture_routing_weight: float,
+    mixture_best_of_k_temperature: float,
     mixture_entropy_weight: float,
     mixture_diversity_weight: float,
 ) -> tuple[PatchFlipMixtureProbe, list[dict[str, float]]]:
@@ -580,7 +625,7 @@ def train_patch_flip_mixture_probe(
     optimizer = torch.optim.Adam(probe.parameters(), lr=float(lr), weight_decay=1e-4)
     baseline_logits = classifier.predict(pooled_component_features(hidden_train, pooling=pooling))
     flip_targets = flipped_binary_targets(baseline_logits, labels, mode=target_mode)
-    dataset = TensorDataset(hidden_train.float(), labels.long(), flip_targets.long())
+    dataset = TensorDataset(hidden_train.float(), labels.long(), flip_targets.long(), baseline_logits.float())
     generator = torch.Generator().manual_seed(seed)
     history: list[dict[str, float]] = []
     for epoch in range(int(epochs)):
@@ -588,7 +633,7 @@ def train_patch_flip_mixture_probe(
         totals: dict[str, float] = {}
         seen = 0
         probe.train()
-        for hidden_batch, _, target_batch in loader:
+        for hidden_batch, _, target_batch, baseline_batch in loader:
             optimizer.zero_grad(set_to_none=True)
             mask_logits, component_logits = adapted_mixture_probe_outputs(
                 probe,
@@ -613,6 +658,11 @@ def train_patch_flip_mixture_probe(
                 target_batch,
                 mask_weights,
                 component_logits,
+                baseline_logits=baseline_batch,
+                mixture_objective=mixture_objective,
+                mixture_effect_weight=mixture_effect_weight,
+                mixture_routing_weight=mixture_routing_weight,
+                mixture_best_of_k_temperature=mixture_best_of_k_temperature,
                 sparsity_weight=sparsity_weight,
                 budget=budget,
                 budget_weight=budget_weight,
@@ -982,6 +1032,10 @@ def main() -> None:
     parser.add_argument("--sparsity-weight", type=float, default=0.0)
     parser.add_argument("--budget-weight", type=float, default=20.0)
     parser.add_argument("--entropy-weight", type=float, default=0.001)
+    parser.add_argument("--mixture-objective", default="nll", choices=("nll", "best_of_k", "effect_best"))
+    parser.add_argument("--mixture-effect-weight", type=float, default=1.0)
+    parser.add_argument("--mixture-routing-weight", type=float, default=0.1)
+    parser.add_argument("--mixture-best-of-k-temperature", type=float, default=1.0)
     parser.add_argument("--mixture-entropy-weight", type=float, default=0.01)
     parser.add_argument("--mixture-diversity-weight", type=float, default=0.05)
     parser.add_argument("--probe-prior-selector", default="none", choices=("none", "cls_similarity", "token_norm", "mixed"))
@@ -1043,6 +1097,10 @@ def main() -> None:
             prior_selector=args.probe_prior_selector,
             prior_weight=args.probe_prior_weight,
             component_count=int(args.probe_components),
+            mixture_objective=args.mixture_objective,
+            mixture_effect_weight=args.mixture_effect_weight,
+            mixture_routing_weight=args.mixture_routing_weight,
+            mixture_best_of_k_temperature=args.mixture_best_of_k_temperature,
             mixture_entropy_weight=args.mixture_entropy_weight,
             mixture_diversity_weight=args.mixture_diversity_weight,
         )

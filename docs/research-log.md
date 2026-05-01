@@ -948,9 +948,25 @@ signals. Keep this focused on what was tried and what was learned.
   top-64/top-128 all tied at test WGA `0.90625` and test accuracy `0.953125`, so
   the stronger intervention diagnostic still does not become a discriminative
   downstream feature-ranking signal in the current consumer.
+- Added objective choices for mixture training. `mixture_objective=effect_best`
+  directly selects the component with the largest soft decision-logit drop in
+  each training batch and optionally trains the routing head toward that
+  component. This did not help the hard diagnostic: zero-replacement
+  effect-selected test drop fell to `0.284`, below the mixture-NLL run's
+  `0.290`, despite staying above CLS-top.
+- The smoother `mixture_objective=best_of_k` with temperature `0.25` did help on
+  the stronger edit. Zero-replacement effect-selected test drop reached `0.304`,
+  improving over mixture NLL `0.290`, single learned mask `0.269`, CLS-top
+  `0.239`, and random `0.094`, with the same `0.0234375` decision flip rate.
+  Under mean replacement it did not improve: effect-selected drop was `0.262`
+  versus `0.267` for mixture NLL.
+- Fed the best-of-K zero-replacement mixture-effect scores into soft-score
+  causal DFR. Learned and random top-64/top-128 again tied at test WGA
+  `0.90625` and test accuracy `0.953125`.
 - Interpretation: multi-hypothesis probing is the first patch-probe iteration to
-  beat the single learned mask on the main intervention metric. The useful
+  beat the single learned mask on the main intervention metric, and best-of-K
+  training can strengthen the harsher zero-replacement diagnostic. The useful
   decision rule is not posterior marginal averaging, which smears masks, but
-  effect-selected posterior components. Next steps should improve the consumer
-  or train the mixture with the effect-selection rule in the loop, rather than
-  spending compute on full benchmark promotion yet.
+  effect-selected posterior components. The bottleneck is now the consumer: the
+  feature-ranking path still cannot distinguish the stronger intervention score
+  from random controls, so full benchmark promotion remains premature.

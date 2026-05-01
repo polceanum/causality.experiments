@@ -15,6 +15,7 @@ from scripts.report_waterbirds_patch_flip_probe import (
     mixture_component_diversity_loss,
     mixture_mask_scores,
     normalized_patch_prior_scores,
+    _mixture_probe_loss,
 )
 from causality_experiments.patch_interventions import PatchFlipProbe
 
@@ -114,6 +115,40 @@ def test_mixture_component_diversity_penalizes_overlap() -> None:
     different = torch.tensor([[[1.0, 0.0], [0.0, 1.0]]])
 
     assert mixture_component_diversity_loss(identical).item() > mixture_component_diversity_loss(different).item()
+
+
+def test_mixture_probe_loss_can_optimize_effect_best_component() -> None:
+    baseline_logits = torch.tensor([[0.0, 2.0], [3.0, 0.0]])
+    edited_logits_by_component = torch.tensor(
+        [
+            [[0.0, 1.0], [0.0, -1.0]],
+            [[2.0, 0.0], [0.0, 0.0]],
+        ]
+    )
+    mask_weights = torch.full((2, 2, 3), 0.25)
+    component_logits = torch.tensor([[0.0, 2.0], [0.0, 2.0]])
+
+    loss, parts = _mixture_probe_loss(
+        edited_logits_by_component,
+        torch.tensor([0, 1]),
+        mask_weights,
+        component_logits,
+        baseline_logits=baseline_logits,
+        mixture_objective="effect_best",
+        mixture_effect_weight=1.0,
+        mixture_routing_weight=0.1,
+        mixture_best_of_k_temperature=1.0,
+        sparsity_weight=0.0,
+        budget=0.25,
+        budget_weight=0.0,
+        entropy_weight=0.0,
+        mixture_entropy_weight=0.0,
+        mixture_diversity_weight=0.0,
+    )
+
+    assert parts["best_effect_drop"] == 3.0
+    assert parts["routing_loss"] < 0.2
+    assert loss.item() < parts["selected_flip_loss"]
 
 
 def test_evaluate_intervention_strategy_reports_flat_group_metrics() -> None:

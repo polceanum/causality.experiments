@@ -466,7 +466,13 @@ goal, not incidental development mechanics.
   CLS-top, with decision flip rate `0.0234375`. The stronger mixture-effect
   feature score still tied random in the existing soft-score causal DFR consumer
   (`0.90625` test WGA), so this is a better mechanism diagnostic rather than a
-  downstream benchmark improvement yet.
+  downstream benchmark improvement yet. Training the mixture with a direct
+  effect-best objective overfit the soft proxy (`0.284` zero-replacement drop),
+  but a smoother best-of-K flip objective improved the zero-replacement
+  effect-selected drop to `0.304`. The gentler mean-replacement run did not
+  improve (`0.262` versus `0.267` for mixture NLL), and the best-of-K feature
+  scores still tied random in soft-score causal DFR, so this remains a
+  mechanism-level gain.
 - The first new Track A configs are:
   - `waterbirds_features_official_adv_representation_dfr_score_gate`
   - `waterbirds_features_official_adv_representation_dfr_nuisance_regularized`
