@@ -418,80 +418,15 @@ goal, not incidental development mechanics.
   after a long no-output run and should be revisited only with a more efficient
   extraction path. Treat DINO decomposition as mechanistically promising on the
   diagnostic slice but not yet a benchmark improvement.
-- The next component-causal implementation slice has started. Decomposed
-  exports now preserve component-aware feature names such as `feature_cls_*`,
-  `feature_foreground_*`, and `feature_background_*`, and feature manifests
-  record `feature_columns` plus `feature_components` so discovery scores can
-  map back to patch-derived groups instead of anonymous dimensions. Hugging
-  Face patch pooling now also supports selector-style component modes:
-  `hf_patch_cls_components` uses CLS-similarity top/bottom patch tokens, and
-  `hf_patch_norm_components` uses token-norm top/bottom patch tokens. A new
-  `causality_experiments.patch_interventions` module provides latent patch
-  selectors, zero/mean/donor/prototype replacement helpers, and summary metrics
-  for counterfactual logit effects. The first limit384 selector screens did not
-  beat fixed DINO patch pooling: `hf_patch_cls_components` tied the old
-  diagnostic at official DFR test WGA `0.875`, while `hf_patch_norm_components`
-  reached `0.84375`. A compact clue/soft-shrink pass on the CLS selector also
-  stayed at `0.875`; fused clues selected a meaningfully different support from
-  stats-only top-k, but the downstream shrink search mostly chose scale `1.0`,
-  so the current soft-shrink consumer is effectively falling back to plain DFR.
-  The first active latent-probe report is now implemented in
-  `scripts/report_waterbirds_patch_flip_probe.py`. It trains a sparse patch
-  selector to flip the frozen DFR head's decision after patch-token replacement,
-  then compares the learned mask with CLS-similarity, bottom-patch, token-norm,
-  and random controls. On the limit384 CLS-pooling diagnostic with a 10% patch
-  budget, the learned mask produced the largest decision-logit drop under both
-  mean replacement (`0.243` versus `0.223` for CLS-top and `0.133` random) and
-  zero replacement (`0.269` versus `0.239` for CLS-top and `0.087` random), but
-  flip-rate and accuracy movement remained small. This validates active probing
-  as an evidence generator, not yet a benchmark-improving intervention. The
-  probe report now also emits component feature tables and discovery-compatible
-  `feature_name,score` CSVs. A first downstream screen on the limit384 component
-  table found that official causal-shrink stayed at `0.875` WGA for learned,
-  heuristic, and random supports, while soft-score causal DFR reached `0.90625`
-  for both learned and random supports. Inspired by Distribution Transformers'
-  prior-adaptive posterior updates, the runner can now inject CLS-similarity,
-  token-norm, or mixed patch priors into the learned mask logits; a simple
-  additive CLS prior did not improve the probe (`0.236`-`0.239` decision-logit
-  drop versus `0.246` prior-free), so the more promising adaptation is a
-  multi-hypothesis/uncertainty-aware posterior over masks rather than a single
-  prior-biased mask head. That follow-up is now implemented with
-  `--probe-components`: the runner trains a mixture of patch-mask hypotheses
-  with mixture entropy and diversity regularization, then reports posterior
-  marginal, MAP-component, validation-selected, and per-example effect-selected
-  masks. On the same limit384 setup, the effect-selected 4-component mixture
-  improved mean replacement decision-logit drop to `0.267` versus `0.246` for
-  the single learned mask and `0.223` for CLS-top. Under zero replacement it
-  improved to `0.290` versus `0.269` for the single learned mask and `0.239` for
-  CLS-top, with decision flip rate `0.0234375`. The stronger mixture-effect
-  feature score still tied random in the existing soft-score causal DFR consumer
-  (`0.90625` test WGA), so this is a better mechanism diagnostic rather than a
-  downstream benchmark improvement yet. Training the mixture with a direct
-  effect-best objective overfit the soft proxy (`0.284` zero-replacement drop),
-  but a smoother best-of-K flip objective improved the zero-replacement
-  effect-selected drop to `0.304`. The gentler mean-replacement run did not
-  improve (`0.262` versus `0.267` for mixture NLL), and the best-of-K feature
-  scores still tied random in soft-score causal DFR, so this remains a
-  mechanism-level gain. The newest consumer path uses the probe as a feature
-  table generator instead of flattening it to scalar scores:
-  `scripts/report_waterbirds_patch_flip_probe.py --write-intervention-feature-tables`
-  writes original, edited/suppressed, delta, original+delta, original+edited,
-  and all-view component tables, then screens them with the same official DFR
-  protocol. On the limit384 best-of-K zero-replacement diagnostic, the
-  `original_plus_edited` table reached test WGA `0.90625` and test accuracy
-  `0.9375` versus the original component table at test WGA `0.875` and test
-  accuracy `0.9296875`; pure delta fell to WGA `0.78125`, and all-views fell
-  back to `0.875`. This is the first patch-probe downstream lift on this slice,
-  but it is not stable yet: repeating the same limit384 screen for seeds
-  `101`-`103` gave `original_plus_edited` test WGA values
-  `0.90625`, `0.875`, and `0.875` against original-table WGA `0.875` for all
-  three seeds. A root-cause check found no concatenation/row-order bug: the
-  original half of `original_plus_edited` exactly matches the original table and
-  original features are identical across generated seeds. The seed-101 lift is
-  one corrected group-0 test example and requires the generated seed-101 edited
-  table plus DFR `C=0.7`; fixed `C=1.0` falls back to `0.875`, and fixed
-  `C=0.7` does not rescue generated seed-102/103 tables. Treat this as a useful
-  but brittle consumer direction, not a promotable full benchmark result.
+- Component-aware DINO/HF feature export remains available through the
+  Waterbirds feature-prep path, including `feature_cls_*`,
+  `feature_foreground_*`, `feature_background_*`, and
+  `feature_foreground_minus_background_*` groups. The active latent patch-probe
+  stack built on top of those components was pruned after repeated dead ends:
+  it improved counterfactual logit-drop diagnostics but did not produce a
+  seed-stable downstream WGA lift, and the only compact feature-table bump was a
+  one-example/C-grid artifact. See `docs/failed-attempts.md` for the preserved
+  lesson; do not restart from that patch-probe runner as a next anchor.
 - The first new Track A configs are:
   - `waterbirds_features_official_adv_representation_dfr_score_gate`
   - `waterbirds_features_official_adv_representation_dfr_nuisance_regularized`

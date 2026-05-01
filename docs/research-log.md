@@ -798,20 +798,19 @@ signals. Keep this focused on what was tried and what was learned.
   pools top and bottom patch tokens by token norm. Both export CLS,
   foreground-like, background-like, and difference summaries through the same
   feature CSV path.
-- Added `causality_experiments.patch_interventions`, a lightweight latent-token
-  intervention module. It can select patches from CLS-similarity or token-norm
-  scores, replace selected tokens with zero, image mean, donor tokens, or
-  prototype centroids, rebuild hidden states, and summarize counterfactual
-  target-logit deltas, prediction flip rates, correct-to-wrong rates, and
-  group-conditioned effects.
+- Added a lightweight latent-token intervention module for patch editing and
+  counterfactual summaries. This branch was later pruned after the active
+  patch-probe stack failed to transfer into seed-stable downstream WGA; the
+  component-aware feature export remains, but the intervention module no longer
+  exists in active code.
 - Interpretation: this does not yet claim a Waterbirds improvement. It creates
   the missing bridge between patch decomposition and causal discovery: patch
   components can now be named, probed, counterfactually edited, and converted
   into discovery-compatible evidence before downstream DFR or causal-shrink
   consumers use them.
-- Verification: focused feature-prep and patch-intervention tests passed with
-  `26 passed`; adjacent discovery/clue/sweep tests passed with `30 passed`;
-  the full regression suite passed with `145 passed`.
+- Verification at the time: focused feature-prep and patch-intervention tests
+  passed with `26 passed`; adjacent discovery/clue/sweep tests passed with
+  `30 passed`; the full regression suite passed with `145 passed`.
 
 ## 2026-05-01: Selector Patch Pooling Screens
 
@@ -843,172 +842,11 @@ signals. Keep this focused on what was tried and what was learned.
   background-like patches, donor replacements, and prototype replacements, then
   convert only intervention effects that beat controls into discovery scores.
 
-## 2026-05-01: Active Patch Flip Probe
+## 2026-05-01: Patch Probe Stack Pruned
 
-- Added a trainable latent patch-probing path. `PatchFlipProbe` scores each
-  patch token from patch, CLS context, and patch-CLS interaction features. The
-  probe is trained with the frozen DINO hidden states and frozen official-DFR
-  head held fixed: it edits selected patch tokens, rebuilds the pooled patch
-  component features, and optimizes the edited logits toward the opposite
-  current model decision. A budget-matching loss initializes and keeps the soft
-  mask near the requested patch budget so the probe learns a small edit policy
-  instead of collapsing to no edit.
-- Added `scripts/report_waterbirds_patch_flip_probe.py`, which extracts DINO
-  hidden states, fits the official validation-split DFR head on pooled patch
-  components, trains the active probe on the train split, and reports test-set
-  counterfactual effects for learned-probe, CLS-top, CLS-bottom, token-norm,
-  and random patch masks at matched top-k.
-- Limit96 smoke: with CLS-similarity pooling, 10% patch budget, mean
-  replacement, and 12 probe epochs, the learned probe reduced the frozen head's
-  decision logit more than passive controls (`0.158` mean decision-logit drop
-  versus `0.100` for CLS-top and `0.079` random), while keeping the same
-  single-example flip rate as CLS-top.
-- Limit384 diagnostic with CLS-similarity pooling, 10% patch budget, seed `101`,
-  10 DFR retrains, and 20 probe epochs:
-  - Mean replacement: learned probe decision-logit drop `0.243`, CLS-top
-    `0.223`, token-norm `0.147`, random `0.133`. Learned and CLS-top both had
-    decision flip rate `0.0078125`.
-  - Zero replacement: learned probe decision-logit drop `0.269`, CLS-top
-    `0.239`, token-norm `0.110`, random `0.087`. CLS-top had a slightly higher
-    flip rate (`0.0234375`) than the learned probe (`0.015625`), but the learned
-    mask produced the largest average decision-logit effect.
-- Interpretation: actively training the latent counterfactual probe works as a
-  probing mechanism: it learns patch masks that are more decision-sensitive than
-  hand-coded selectors at matched sparsity. It is not yet a benchmark
-  intervention, because flip rates and WGA/accuracy movement remain small on
-  the diagnostic slice. The next step is to convert learned-probe evidence into
-  component or feature-level discovery scores and test whether those scores
-  improve downstream feature selection, rather than treating the patch edit
-  itself as the final method.
-- Verification: focused patch/report/feature tests passed with `32 passed`; the
-  full regression suite passed with `151 passed`.
-
-## 2026-05-01: Patch Probe Scores and Prior Adaptation
-
-- Extended `scripts/report_waterbirds_patch_flip_probe.py` so the active probe
-  emits a component feature table and discovery-compatible feature score CSVs
-  for learned, learned-minus-random, CLS-top, CLS-bottom, token-norm, and random
-  patch interventions. The score is an attribution-style estimate of how much
-  each edited component feature contributes to dropping the frozen model's
-  original decision logit.
-- Fed the generated limit384 component table and learned probe scores into
-  existing score consumers. Official causal-shrink DFR tied the baseline at test
-  WGA `0.875` for learned top-64/top-128, heuristic controls, and random
-  controls; learned/excess-random supports slightly reduced test accuracy to
-  `0.921875` while controls stayed at `0.9296875`. Soft-score causal DFR reached
-  test WGA `0.90625` and test accuracy `0.953125`, but learned and random
-  supports tied exactly at top-64/top-128, so this consumer is not reading a
-  discriminative ranking from the current score export.
-- Read Distribution Transformers (arXiv:2502.02463) as a mechanism prompt. The
-  most relevant idea is prior-flexible amortized updating: represent a prior,
-  condition on observations, and output a posterior in the same family so the
-  posterior can become the next prior. A lightweight transfer is now implemented:
-  the patch-flip runner can add normalized CLS-similarity, token-norm, or mixed
-  patch priors to the learned probe logits before the hard top-k mask is formed.
-- The simple additive-prior diagnostic did not improve the active probe. On the
-  same limit384 mean-replacement setup, CLS prior weight `0.5` produced learned
-  decision-logit drop `0.239`, and weight `0.1` produced `0.236`, both below the
-  prior-free learned probe at `0.246` though still above passive CLS-top at
-  `0.223`.
-- Interpretation: prior adaptation is the right conceptual direction, but the
-  current single-head additive prior is too restrictive. The next paper-inspired
-  version should keep multiple posterior mask hypotheses, with per-hypothesis
-  weights/uncertainty and diversity, then select by posterior marginal or
-  risk-adjusted expected effect. That would better match the paper's
-  distribution-to-distribution update than a scalar prior bias.
-
-## 2026-05-01: Multi-Hypothesis Patch Posterior
-
-- Implemented the paper-inspired posterior-over-masks variant in
-  `scripts/report_waterbirds_patch_flip_probe.py`. `--probe-components K` now
-  trains a `PatchFlipMixtureProbe`: K independent patch-mask hypotheses plus a
-  learned mixture-weight head. The training loss uses a mixture negative
-  log-likelihood for the flipped-decision target, the existing budget penalty,
-  mask entropy hardening, mixture-entropy reward, and pairwise mask-diversity
-  penalty.
-- The report now evaluates four learned posterior decision rules when K > 1:
-  posterior marginal top-k, MAP-component top-k, validation-selected component,
-  and a per-example effect-selected component that chooses the component with
-  the largest expected drop in the frozen model's current decision logit. The
-  last rule is label-free but uses the frozen head as its own intervention
-  scorer.
-- Limit384, CLS-similarity pooling, 10% patch budget, 4 components, mean
-  replacement: effect-selected mixture produced decision-logit drop `0.267`,
-  improving over the prior-free single learned mask at `0.246`, validation-best
-  mixture component at `0.243`, MAP component at `0.237`, marginal at `0.215`,
-  CLS-top at `0.223`, and random at `0.139`. Flip rate remained `0.0078125`.
-- Limit384 with zero replacement: effect-selected mixture produced
-  decision-logit drop `0.290`, improving over the prior-free single learned mask
-  at `0.269`, validation-best mixture component at `0.277`, MAP component at
-  `0.264`, CLS-top at `0.239`, and random at `0.094`. Decision flip rate reached
-  `0.0234375`, matching CLS-top and exceeding the single learned mask's
-  `0.015625`.
-- Fed the zero-replacement mixture-effect feature score into the existing
-  soft-score causal DFR consumer. Learned top-64/top-128 and matched random
-  top-64/top-128 all tied at test WGA `0.90625` and test accuracy `0.953125`, so
-  the stronger intervention diagnostic still does not become a discriminative
-  downstream feature-ranking signal in the current consumer.
-- Added objective choices for mixture training. `mixture_objective=effect_best`
-  directly selects the component with the largest soft decision-logit drop in
-  each training batch and optionally trains the routing head toward that
-  component. This did not help the hard diagnostic: zero-replacement
-  effect-selected test drop fell to `0.284`, below the mixture-NLL run's
-  `0.290`, despite staying above CLS-top.
-- The smoother `mixture_objective=best_of_k` with temperature `0.25` did help on
-  the stronger edit. Zero-replacement effect-selected test drop reached `0.304`,
-  improving over mixture NLL `0.290`, single learned mask `0.269`, CLS-top
-  `0.239`, and random `0.094`, with the same `0.0234375` decision flip rate.
-  Under mean replacement it did not improve: effect-selected drop was `0.262`
-  versus `0.267` for mixture NLL.
-- Fed the best-of-K zero-replacement mixture-effect scores into soft-score
-  causal DFR. Learned and random top-64/top-128 again tied at test WGA
-  `0.90625` and test accuracy `0.953125`.
-- Interpretation: multi-hypothesis probing is the first patch-probe iteration to
-  beat the single learned mask on the main intervention metric, and best-of-K
-  training can strengthen the harsher zero-replacement diagnostic. The useful
-  decision rule is not posterior marginal averaging, which smears masks, but
-  effect-selected posterior components. The bottleneck is now the consumer: the
-  feature-ranking path still cannot distinguish the stronger intervention score
-  from random controls, so full benchmark promotion remains premature.
-
-## 2026-05-01: Intervention-Derived Feature Tables
-
-- Added an opt-in feature-table consumer to
-  `scripts/report_waterbirds_patch_flip_probe.py` via
-  `--write-intervention-feature-tables`. The report now applies the selected
-  patch intervention to each split, rebuilds pooled component features, writes
-  per-example metadata (`intervention_effect_drop`, selected mixture component,
-  label/env/group), and screens DFR on six views: `original`, `edited`, `delta`,
-  `original_plus_delta`, `original_plus_edited`, and `all_views`.
-- Limit384, CLS-similarity pooling, 10% patch budget, seed `101`, 10 DFR
-  retrains, 4-component best-of-K mixture, temperature `0.25`, zero replacement:
-  the original component table reached test WGA `0.875` and test accuracy
-  `0.9296875`; edited/suppressed reached WGA `0.875` and accuracy `0.9375`;
-  pure delta fell to WGA `0.78125`; original+delta tied WGA `0.875`; and
-  original+edited reached WGA `0.90625` with accuracy `0.9375`. The larger
-  all-views table fell back to WGA `0.875`.
-- Interpretation: the probe signal survives when DFR can see both the original
-  representation and the counterfactual suppressed representation, but it is
-  diluted or destabilized when passed only as scalar feature scores, pure deltas,
-  or a wide all-views table. This is the first patch-probe downstream lift on
-  the compact Waterbirds/DINO slice, but it is not yet a full-benchmark claim;
-  the next check is seed/limit stability for `original_plus_edited`.
-- Seed-stability follow-up on the same limit384 screen for seeds `101`-`103`:
-  the original component table stayed at WGA `0.875` on all three seeds, while
-  `original_plus_edited` reached `0.90625`, `0.875`, and `0.875`. The mean delta
-  is positive but driven by seed `101`, so the edited-view consumer is promising
-  but not stable enough for promotion. A quick attempt to add effect-drop and
-  selected-component diagnostics as feature columns did not stabilize the lift,
-  so that extra variant was not kept in the main workflow.
-- Root-cause diagnostic: the seed `101` lift is exactly one test example. The
-  original DFR head missed group-0 test index `4`; `original_plus_edited` with
-  the generated seed-101 table and validation-selected `C=0.7` corrected that
-  example, moving its decision margin from `+0.215` to `-0.128` and raising the
-  worst group from `28/32` to `29/32`. The concatenated table construction is
-  not the bug: metadata ordering matches, the original half of the concatenated
-  table exactly equals the original table, and original features are identical
-  across generated seeds. The lift requires both the seed-101 edited table and
-  the less-regularized DFR choice: fixed `C=1.0` falls back to WGA `0.875`,
-  while fixed `C=0.7` preserves the seed-101 lift but does not lift generated
-  seed-102 or seed-103 tables. Treat this as a brittle edited-feature/C-grid
-  interaction, not a robust mechanism win.
+- The active latent patch-probe stack was removed from active code after it
+  failed to produce a seed-stable downstream improvement. The preserved lesson
+  is now in `docs/failed-attempts.md`: learned and multi-hypothesis patch masks
+  improved frozen-head counterfactual logit-drop diagnostics, but scalar scores,
+  edited feature tables, priors, and direct effect objectives did not beat
+  matched controls in a promotable way.

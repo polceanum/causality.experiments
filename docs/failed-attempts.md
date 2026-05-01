@@ -220,6 +220,36 @@ issues unless they invalidate an experimental result.
     mechanism changes the representation objective or feature source more
     substantially.
 
+## 2026-05-01
+
+- **Active latent patch-probe stack as a Waterbirds improvement path**
+  - Attempt: build a trainable patch-level counterfactual probe over frozen
+    DINO hidden states and official-DFR component features. Variants included a
+    single `PatchFlipProbe`, additive CLS/token-norm priors inspired by
+    Distribution Transformers, multi-hypothesis patch-mask posteriors,
+    best-of-K/effect-best objectives, scalar feature-score exports, and
+    intervention-derived feature tables such as original+edited and delta views.
+  - Result: the probe produced stronger frozen-head intervention diagnostics
+    than passive selectors. On the limit384 zero-replacement diagnostic, the
+    best-of-K 4-component effect-selected mask reached about `0.304` mean
+    decision-logit drop versus about `0.269` for a single learned mask and
+    `0.239` for CLS-top. However, downstream consumers repeatedly failed:
+    feature scores tied random controls, direct effect objectives overfit the
+    proxy, pure deltas hurt, and the only `original_plus_edited` WGA lift was a
+    one-test-example seed-101 artifact (`0.90625`, `0.875`, `0.875` over seeds
+    `101`-`103`). Root-cause checks found no row-order or concatenation bug; the
+    lift required the generated seed-101 edited table plus DFR `C=0.7`, while
+    fixed `C=1.0` returned to `0.875`.
+  - Interpretation: patch probing was useful as a diagnostic of frozen-head
+    decision-sensitive regions, but the current mechanisms did not transfer
+    into seed-stable downstream Waterbirds WGA. The compact WGA slice is also
+    one-example sensitive, making it easy to mistake artifacts for progress.
+  - Action: remove the patch-probe runner, intervention helpers, and tests from
+    active code. Preserve only the component-aware feature export path. Future
+    work should restart from a principled objective and must cross generated
+    artifact seed, DFR fit seed, fixed-C controls, and random controls before
+    treating compact lifts as meaningful.
+
 - **Global supervised contrastive loss as an immediate upstream feature fix**
   - Attempt: add a global cross-background supervised-contrastive loss during
     Waterbirds ResNet feature generation, with same-label/different-background
