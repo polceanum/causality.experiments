@@ -993,3 +993,10 @@ signals. Keep this focused on what was tried and what was learned.
   or a wide all-views table. This is the first patch-probe downstream lift on
   the compact Waterbirds/DINO slice, but it is not yet a full-benchmark claim;
   the next check is seed/limit stability for `original_plus_edited`.
+- Seed-stability follow-up on the same limit384 screen for seeds `101`-`103`:
+  the original component table stayed at WGA `0.875` on all three seeds, while
+  `original_plus_edited` reached `0.90625`, `0.875`, and `0.875`. The mean delta
+  is positive but driven by seed `101`, so the edited-view consumer is promising
+  but not stable enough for promotion. A quick attempt to add effect-drop and
+  selected-component diagnostics as feature columns did not stabilize the lift,
+  so that extra variant was not kept in the main workflow.

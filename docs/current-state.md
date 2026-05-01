@@ -27,7 +27,7 @@ goal, not incidental development mechanics.
   development signals.
 - `main` is pushed to GitHub.
 - Latest pushed commit before the current working round:
-  - `1d9e5a5` `Add best-of-K mixture probe objective`
+  - `b14de44` `Add intervention feature table probe screen`
 - The repo contains a runnable PyTorch experiment harness for all 8 paper
   experiments using tiny generated fixtures.
 - Runnable methods:
@@ -482,8 +482,11 @@ goal, not incidental development mechanics.
   `0.9375` versus the original component table at test WGA `0.875` and test
   accuracy `0.9296875`; pure delta fell to WGA `0.78125`, and all-views fell
   back to `0.875`. This is the first patch-probe downstream lift on this slice,
-  but it is still a diagnostic slice rather than a promotable full benchmark
-  result.
+  but it is not stable yet: repeating the same limit384 screen for seeds
+  `101`-`103` gave `original_plus_edited` test WGA values
+  `0.90625`, `0.875`, and `0.875` against original-table WGA `0.875` for all
+  three seeds. Treat this as a useful consumer direction, not a promotable full
+  benchmark result.
 - The first new Track A configs are:
   - `waterbirds_features_official_adv_representation_dfr_score_gate`
   - `waterbirds_features_official_adv_representation_dfr_nuisance_regularized`
