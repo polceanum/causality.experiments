@@ -70,6 +70,7 @@ goal, not incidental development mechanics.
   - `conda run -n orpheus python scripts/run_seed_sweep.py --match 07 --seeds 11,12,13`
   - `conda run -n orpheus python scripts/report_seed_sweep.py --match 07`
   - `conda run -n orpheus python scripts/report_probe_diagnostics.py --match 05_waterbirds`
+  - `conda run -n orpheus python scripts/run_llm_counterfactual_clue_probe.py --config configs/experiments/01_synthetic_linear.yaml --llm-backend mock`
   - `conda run -n orpheus python scripts/report_benchmark_alignment.py`
   - `conda run -n orpheus python -m causality_experiments run --config configs/benchmarks/waterbirds_features.yaml`
   - `conda run -n orpheus python scripts/run_method_sweep.py --config configs/benchmarks/waterbirds_features.yaml --skip-incompatible --dry-run`
@@ -491,6 +492,18 @@ goal, not incidental development mechanics.
   CSVs, and source ablation reports. The main entrypoint is
   `scripts/run_waterbirds_clue_fusion_sweep.py`; source-ablation-only reports
   are available through `scripts/report_clue_source_ablation.py`.
+- The first LLM-guided clue-probe implementation slice is now in place. It does
+  not call hosted models and does not revive the pruned patch-probe stack:
+  `causality_experiments.latent_clue_packets` converts feature/probe evidence
+  into stable latent clue packets, `causality_experiments.llm_clue_planner`
+  provides a JSON-constrained mock planner over a fixed test-action catalog,
+  and `causality_experiments.llm_clue_bridge` turns packet/plan/result traces
+  into initial training targets (`hypothesis_label`, `test_value`, and
+  `score_delta`). The fixture-safe CLI entrypoint is
+  `scripts/run_llm_counterfactual_clue_probe.py --llm-backend mock`, which
+  writes replayable packets, hypotheses, test specs, untested clue rows, and
+  training traces. Deterministic executors and real LLM/replay backends are the
+  next implementation layer before any Waterbirds downstream claim.
 - On official Waterbirds repro features, deterministic language clues now
   provide non-neutral weak evidence from activation alignment rather than
   feature names. Language-only top-k sets differ substantially from stats-only

@@ -846,3 +846,20 @@ signals. Keep this focused on what was tried and what was learned.
   improved frozen-head counterfactual logit-drop diagnostics, but scalar scores,
   edited feature tables, priors, and direct effect objectives did not beat
   matched controls in a promotable way.
+
+## 2026-05-01: LLM-Guided Clue-Probe Bridge Started
+
+- Added the first offline implementation slice for bridging latent clue probes
+  with an LLM-style idea generator. `latent_clue_packets` converts feature-card
+  and discovery evidence into stable replayable candidate packets;
+  `llm_clue_planner` constrains the planner to JSON hypotheses and a fixed
+  test-action catalog; `llm_clue_bridge` turns packet/plan/result traces into
+  trainable targets for hypothesis labels, test value, and score deltas.
+- Added `scripts/run_llm_counterfactual_clue_probe.py` as a fixture-safe mock
+  backend runner. It writes feature cards, latent clue packets, hypotheses,
+  test specs, untested clue rows, training traces, and a manifest without
+  calling hosted models or reviving the pruned patch-probe machinery.
+- Interpretation: this is infrastructure for learning which proposed probes are
+  worth running, not yet a Waterbirds improvement. The next layer is
+  deterministic feature-level counterfactual test execution plus replay/local
+  LLM backends, followed by held-out bridge-ranker evaluation.
