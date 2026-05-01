@@ -491,14 +491,7 @@ goal, not incidental development mechanics.
   one corrected group-0 test example and requires the generated seed-101 edited
   table plus DFR `C=0.7`; fixed `C=1.0` falls back to `0.875`, and fixed
   `C=0.7` does not rescue generated seed-102/103 tables. Treat this as a useful
-  but brittle consumer direction, not a promotable full benchmark result. The
-  report now also supports an example-weighted official DFR screen using
-  `intervention_effect_drop` as validation-example weights, with matched random
-  and inverse-effect controls. On the same seeds `101`-`103`, high-effect
-  weighting did not improve the plateau: effect scales `1`/`2` tied mean WGA
-  `0.875`, while stronger scales hurt. The only larger single-row lift came
-  from a random-weight control at seed `101` (`0.9375` WGA), so example
-  weighting is currently a negative screen rather than a next anchor.
+  but brittle consumer direction, not a promotable full benchmark result.
 - The first new Track A configs are:
   - `waterbirds_features_official_adv_representation_dfr_score_gate`
   - `waterbirds_features_official_adv_representation_dfr_nuisance_regularized`

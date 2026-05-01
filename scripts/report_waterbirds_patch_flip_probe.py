@@ -448,7 +448,6 @@ def _feature_bundle_from_splits(
     splits: dict[str, torch.Tensor],
     hidden_bundle: HiddenBundle,
     feature_names: list[str],
-    extra_splits: dict[str, dict[str, torch.Tensor]] | None = None,
 ) -> DatasetBundle:
     bundle_splits: dict[str, dict[str, torch.Tensor]] = {}
     for split_name, matrix in splits.items():
@@ -460,8 +459,6 @@ def _feature_bundle_from_splits(
             "env": (groups // 2).long(),
             "group": groups.long(),
         }
-        if extra_splits and split_name in extra_splits:
-            bundle_splits[split_name].update(extra_splits[split_name])
     return DatasetBundle(
         name=name,
         task="classification",
@@ -1016,7 +1013,6 @@ def build_intervention_feature_variants(
     }
     variant_splits: dict[str, dict[str, torch.Tensor]] = {variant: {} for variant in variant_feature_names}
     variant_rows: dict[str, list[dict[str, Any]]] = {variant: [] for variant in variant_feature_names}
-    extra_splits: dict[str, dict[str, torch.Tensor]] = {}
     for split_offset, split_name in enumerate(("train", "val", "test")):
         matrices = intervention_feature_matrices(
             strategy=strategy,
@@ -1036,10 +1032,7 @@ def build_intervention_feature_variants(
         selected_components = matrices["selected_components"]
         if not isinstance(effect_drop, torch.Tensor):
             raise TypeError("Expected effect_drop to be a tensor.")
-        extra_splits[split_name] = {"intervention_effect_drop": effect_drop.float()}
         selected_tensor = selected_components if isinstance(selected_components, torch.Tensor) else None
-        if selected_tensor is not None:
-            extra_splits[split_name]["selected_component_index"] = selected_tensor.float()
         for variant, feature_names in variant_feature_names.items():
             matrix = matrices[variant]
             if not isinstance(matrix, torch.Tensor):
@@ -1062,7 +1055,6 @@ def build_intervention_feature_variants(
             splits=splits,
             hidden_bundle=hidden_bundle,
             feature_names=variant_feature_names[variant],
-            extra_splits=extra_splits,
         )
         for variant, splits in variant_splits.items()
     }
@@ -1087,102 +1079,6 @@ def evaluate_feature_variant_bundles(
                 "test_wga": worst_group_accuracy(classifier, bundle.split("test")),
             }
         )
-    return rows
-
-
-def _normalised_positive_effect(values: torch.Tensor) -> torch.Tensor:
-    values = values.float().clamp_min(0.0)
-    minimum = values.min()
-    maximum = values.max()
-    if float((maximum - minimum).item()) <= 1e-12:
-        return torch.zeros_like(values)
-    return (values - minimum) / (maximum - minimum).clamp_min(1e-12)
-
-
-def _with_official_dfr_weights(
-    bundle: DatasetBundle,
-    *,
-    weight_key: str,
-    scale: float,
-    mode: str,
-    seed: int,
-) -> DatasetBundle:
-    weighted_splits: dict[str, dict[str, torch.Tensor]] = {}
-    key = mode.strip().lower().replace("-", "_")
-    for split_index, split_name in enumerate(("train", "val", "test")):
-        split = dict(bundle.split(split_name))
-        effect = split.get("intervention_effect_drop")
-        if effect is None:
-            weights = torch.ones(len(split["y"]), dtype=torch.float32)
-        else:
-            normalised = _normalised_positive_effect(effect)
-            if key == "effect":
-                signal = normalised
-            elif key == "inverse_effect":
-                signal = 1.0 - normalised
-            elif key == "random":
-                generator = torch.Generator().manual_seed(int(seed) + split_index)
-                signal = normalised[torch.randperm(len(normalised), generator=generator)]
-            else:
-                raise ValueError("Example weight mode must be one of: effect, inverse_effect, random.")
-            weights = 1.0 + float(scale) * signal
-            weights = weights / weights.mean().clamp_min(1e-12)
-        split[weight_key] = weights.float()
-        weighted_splits[split_name] = split
-    return DatasetBundle(
-        name=f"{bundle.name}_{key}_weighted",
-        task=bundle.task,
-        splits=weighted_splits,
-        input_dim=bundle.input_dim,
-        output_dim=bundle.output_dim,
-        causal_mask=bundle.causal_mask,
-        metadata={**(bundle.metadata or {}), "official_dfr_example_weight_key": weight_key, "example_weight_mode": key},
-    )
-
-
-def evaluate_effect_weighted_feature_bundles(
-    *,
-    bundles: dict[str, DatasetBundle],
-    config: dict[str, Any],
-    variants: list[str],
-    scales: list[float],
-    seed: int,
-    weight_key: str = "official_dfr_weight",
-) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for variant in variants:
-        if variant not in bundles:
-            continue
-        for mode in ("effect", "random", "inverse_effect"):
-            for scale in scales:
-                weighted_bundle = _with_official_dfr_weights(
-                    bundles[variant],
-                    weight_key=weight_key,
-                    scale=scale,
-                    mode=mode,
-                    seed=seed,
-                )
-                weighted_config = {
-                    **config,
-                    "method": {**dict(config.get("method", {})), "official_dfr_example_weight_key": weight_key},
-                }
-                classifier = fit_method(weighted_bundle, weighted_config)
-                rows.append(
-                    {
-                        "variant": variant,
-                        "weight_mode": mode,
-                        "weight_scale": float(scale),
-                        "input_dim": int(weighted_bundle.input_dim),
-                        "official_dfr_best_c": float((classifier.details or {}).get("official_dfr_best_c", float("nan"))),
-                        "official_dfr_best_tune_wga": float(
-                            (classifier.details or {}).get("official_dfr_best_tune_wga", float("nan"))
-                        ),
-                        "val_accuracy": accuracy(classifier, weighted_bundle.split("val")),
-                        "val_wga": worst_group_accuracy(classifier, weighted_bundle.split("val")),
-                        "test_accuracy": accuracy(classifier, weighted_bundle.split("test")),
-                        "test_wga": worst_group_accuracy(classifier, weighted_bundle.split("test")),
-                    }
-                )
     return rows
 
 
@@ -1384,7 +1280,6 @@ def main() -> None:
     parser.add_argument("--replacement", default="mean", choices=("zero", "mean"))
     parser.add_argument("--target-mode", default="prediction", choices=("prediction", "label"))
     parser.add_argument("--write-intervention-feature-tables", action="store_true")
-    parser.add_argument("--intervention-example-weight-scales", default="1.0,2.0,4.0")
     parser.add_argument(
         "--intervention-feature-strategy",
         default="mixture_effect_best_component",
@@ -1544,7 +1439,6 @@ def main() -> None:
     intervention_feature_rows: list[dict[str, Any]] = []
     intervention_feature_paths: dict[str, str] = {}
     intervention_feature_dfr_rows: list[dict[str, Any]] = []
-    intervention_weighted_dfr_rows: list[dict[str, Any]] = []
     out_dir = Path(args.out_dir)
     _write_rows(out_dir / "intervention_rows.csv", rows)
     if validation_component_rows:
@@ -1569,19 +1463,6 @@ def main() -> None:
             else None,
         )
         intervention_feature_dfr_rows = evaluate_feature_variant_bundles(bundles=variant_bundles, config=config)
-        weight_scales = [
-            float(value)
-            for value in str(args.intervention_example_weight_scales).replace(";", ",").split(",")
-            if value.strip()
-        ]
-        if weight_scales:
-            intervention_weighted_dfr_rows = evaluate_effect_weighted_feature_bundles(
-                bundles=variant_bundles,
-                config=config,
-                variants=["original", "original_plus_edited"],
-                scales=weight_scales,
-                seed=args.seed,
-            )
         for variant, rows_for_variant in variant_rows.items():
             path = out_dir / f"intervention_features_{variant}.csv"
             _write_rows(
@@ -1599,8 +1480,6 @@ def main() -> None:
             )
             intervention_feature_paths[variant] = str(path)
         _write_rows(out_dir / "intervention_feature_dfr_rows.csv", intervention_feature_dfr_rows)
-        if intervention_weighted_dfr_rows:
-            _write_rows(out_dir / "intervention_weighted_dfr_rows.csv", intervention_weighted_dfr_rows)
         intervention_feature_rows = [
             {
                 "variant": row["variant"],
@@ -1623,7 +1502,6 @@ def main() -> None:
         "feature_score_paths": score_paths,
         "intervention_feature_paths": intervention_feature_paths,
         "intervention_feature_dfr_rows": str(out_dir / "intervention_feature_dfr_rows.csv") if intervention_feature_dfr_rows else "",
-        "intervention_weighted_dfr_rows": str(out_dir / "intervention_weighted_dfr_rows.csv") if intervention_weighted_dfr_rows else "",
         "intervention_feature_summary": intervention_feature_rows,
         "intervention_rows": str(out_dir / "intervention_rows.csv"),
         "validation_component_rows": str(out_dir / "validation_component_rows.csv") if validation_component_rows else "",

@@ -12,7 +12,6 @@ from scripts.report_waterbirds_patch_flip_probe import (
     build_intervention_feature_score_rows,
     compact_official_details,
     component_feature_names,
-    evaluate_effect_weighted_feature_bundles,
     evaluate_intervention_strategy,
     mixture_component_diversity_loss,
     mixture_mask_scores,
@@ -300,50 +299,6 @@ def test_build_intervention_feature_variants_emits_counterfactual_tables() -> No
     assert rows_by_variant["edited"][0]["split"] == "train"
     assert "intervention_effect_drop" in rows_by_variant["edited"][0]
     assert "selected_component_index" in rows_by_variant["edited"][0]
-    assert "intervention_effect_drop" in bundles["original"].split("val")
-
-
-def test_evaluate_effect_weighted_feature_bundles_reports_controls() -> None:
-    hidden = {split: torch.randn(8, 5, 2) for split in ("train", "val", "test")}
-    labels = {split: torch.tensor([0, 0, 1, 1, 0, 1, 0, 1]) for split in hidden}
-    groups = {split: torch.tensor([0, 0, 1, 1, 2, 2, 3, 3]) for split in hidden}
-    classifier = OfficialDFRClassifier(
-        weight=torch.tensor([[0.0] * 8, [1.0, 0.0, 0.5, 0.0, -0.5, 0.0, 0.25, 0.0]]),
-        bias=torch.zeros(2),
-        output_dim=2,
-    )
-    probe = PatchFlipMixtureProbe(token_dim=2, component_count=2, hidden_dim=4, initial_mask_probability=0.25)
-    bundles, _, _ = build_intervention_feature_variants(
-        hidden_bundle=HiddenBundle(hidden=hidden, labels=labels, groups=groups),
-        classifier=classifier,
-        pooling="cls_similarity",
-        top_k=1,
-        replacement="zero",
-        strategy="mixture_effect_best_component",
-        probe=probe,
-        budget=0.25,
-    )
-    config = {
-        "seed": 7,
-        "method": {
-            "kind": "official_dfr_val_tr",
-            "official_dfr_c_grid": [1.0],
-            "official_dfr_num_retrains": 1,
-            "official_dfr_balance_val": False,
-        },
-    }
-
-    rows = evaluate_effect_weighted_feature_bundles(
-        bundles=bundles,
-        config=config,
-        variants=["original"],
-        scales=[2.0],
-        seed=7,
-    )
-
-    assert {row["weight_mode"] for row in rows} == {"effect", "random", "inverse_effect"}
-    assert all(row["weight_scale"] == 2.0 for row in rows)
-    assert all(row["variant"] == "original" for row in rows)
 
 
 def test_build_excess_feature_score_rows_subtracts_control_raw_scores() -> None:

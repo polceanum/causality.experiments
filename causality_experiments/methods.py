@@ -649,7 +649,6 @@ def _fit_official_logreg_raw(
     c_value: float,
     seed: int,
     feature_scale: np.ndarray | None = None,
-    sample_weight: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     scaler = StandardScaler()
     x_train_scaled = scaler.fit_transform(x_train)
@@ -665,11 +664,7 @@ def _fit_official_logreg_raw(
         max_iter=1000,
         random_state=seed,
     )
-    if sample_weight is not None:
-        sample_weight = np.asarray(sample_weight, dtype=np.float64)
-        if sample_weight.shape != (len(y_train),):
-            raise ValueError("Official DFR sample_weight must match the number of training examples.")
-    logreg.fit(x_train_scaled, y_train, sample_weight=sample_weight)
+    logreg.fit(x_train_scaled, y_train)
     coef = np.asarray(logreg.coef_, dtype=np.float64)
     intercept = np.asarray(logreg.intercept_, dtype=np.float64)
     scale = np.asarray(scaler.scale_, dtype=np.float64)
@@ -687,21 +682,6 @@ def _official_dfr_c_grid(method: dict[str, Any]) -> list[float]:
     if not grid:
         raise ValueError("official_dfr_c_grid must contain at least one C value.")
     return grid
-
-
-def _official_dfr_split_weights(split: dict[str, torch.Tensor], key: str) -> np.ndarray:
-    if key not in split:
-        raise ValueError(f"Official DFR example weight key {key!r} is missing from a required split.")
-    weights = split[key].detach().cpu().numpy().astype(np.float64, copy=False)
-    if weights.shape != (len(split["y"]),):
-        raise ValueError("Official DFR example weights must be a 1D tensor matching the split length.")
-    if not np.all(np.isfinite(weights)):
-        raise ValueError("Official DFR example weights must be finite.")
-    if np.any(weights < 0.0):
-        raise ValueError("Official DFR example weights must be non-negative.")
-    if float(np.sum(weights)) <= 0.0:
-        raise ValueError("Official DFR example weights must have positive total mass.")
-    return weights
 
 
 def _official_dfr_val_split(
@@ -1025,7 +1005,6 @@ def _fit_official_dfr_on_bundle(
     balance_val = bool(method.get("official_dfr_balance_val", True))
     add_train = bool(method.get("official_dfr_add_train", False))
     num_retrains = int(method.get("official_dfr_num_retrains", 20))
-    example_weight_key = str(method.get("official_dfr_example_weight_key", "")).strip()
     if num_retrains <= 0:
         raise ValueError("official_dfr_num_retrains must be positive.")
     c_grid = _official_dfr_c_grid(method)
@@ -1044,8 +1023,6 @@ def _fit_official_dfr_on_bundle(
     val_x = val["x"].cpu().numpy().astype(np.float64, copy=False)
     val_y = val["y"].cpu().numpy().astype(np.int64, copy=False)
     val_g = val["group"].cpu().numpy().astype(np.int64, copy=False)
-    train_w = _official_dfr_split_weights(train, example_weight_key) if example_weight_key else None
-    val_w = _official_dfr_split_weights(val, example_weight_key) if example_weight_key else None
 
     retrain_x, retrain_y, retrain_g, tune_x, tune_y, tune_g, retrain_idx = _official_dfr_val_split(
         val_x,
@@ -1053,7 +1030,6 @@ def _fit_official_dfr_on_bundle(
         val_g,
         seed=seed,
     )
-    retrain_w = val_w[retrain_idx] if val_w is not None else None
     tune_rng = np.random.default_rng(seed)
     balanced_retrain_idx = np.arange(len(retrain_x))
     if balance_val:
@@ -1061,19 +1037,13 @@ def _fit_official_dfr_on_bundle(
     balanced_retrain_x = retrain_x[balanced_retrain_idx]
     balanced_retrain_y = retrain_y[balanced_retrain_idx]
     balanced_retrain_g = retrain_g[balanced_retrain_idx]
-    balanced_retrain_w = retrain_w[balanced_retrain_idx] if retrain_w is not None else None
 
     tune_fit_x = balanced_retrain_x
     tune_fit_y = balanced_retrain_y
-    tune_fit_w = balanced_retrain_w
     if add_train:
         train_take = len(balanced_retrain_x)
         tune_fit_x = np.concatenate([train_x[:train_take], balanced_retrain_x], axis=0)
         tune_fit_y = np.concatenate([train_y[:train_take], balanced_retrain_y], axis=0)
-        if train_w is not None or balanced_retrain_w is not None:
-            train_part_w = np.ones(train_take, dtype=np.float64) if train_w is None else train_w[:train_take]
-            val_part_w = np.ones(len(balanced_retrain_x), dtype=np.float64) if balanced_retrain_w is None else balanced_retrain_w
-            tune_fit_w = np.concatenate([train_part_w, val_part_w], axis=0)
 
     best_c = c_grid[0]
     best_feature_scale_label = float(feature_scale_grid[0][0])
@@ -1089,7 +1059,6 @@ def _fit_official_dfr_on_bundle(
                 c_value=c_value,
                 seed=seed,
                 feature_scale=feature_scale,
-                sample_weight=tune_fit_w,
             )
             score = tune_x @ raw_coef.T + raw_intercept
             pred = (score[:, 0] > 0.0).astype(np.int64) if score.shape[1] == 1 else np.argmax(score, axis=1)
@@ -1116,10 +1085,8 @@ def _fit_official_dfr_on_bundle(
             final_x = final_x[selected_val_idx]
             final_y = final_y[selected_val_idx]
             final_g = final_g[selected_val_idx]
-        final_w = val_w[selected_val_idx] if val_w is not None else None
         fit_x = final_x
         fit_y = final_y
-        fit_w = final_w
         train_subset_idx: np.ndarray = np.array([], dtype=np.int64)
         if add_train:
             train_take = len(final_x)
@@ -1128,17 +1095,12 @@ def _fit_official_dfr_on_bundle(
             train_subset_idx = train_subset_idx[:train_take]
             fit_x = np.concatenate([train_x[train_subset_idx], final_x], axis=0)
             fit_y = np.concatenate([train_y[train_subset_idx], final_y], axis=0)
-            if train_w is not None or final_w is not None:
-                train_part_w = np.ones(len(train_subset_idx), dtype=np.float64) if train_w is None else train_w[train_subset_idx]
-                val_part_w = np.ones(len(final_x), dtype=np.float64) if final_w is None else final_w
-                fit_w = np.concatenate([train_part_w, val_part_w], axis=0)
         raw_coef, raw_intercept, scaler_mean, scaler_scale = _fit_official_logreg_raw(
             fit_x,
             fit_y,
             c_value=best_c,
             seed=seed + offset,
             feature_scale=best_feature_scale,
-            sample_weight=fit_w,
         )
         raw_coefs.append(raw_coef)
         raw_intercepts.append(raw_intercept)
@@ -1168,7 +1130,6 @@ def _fit_official_dfr_on_bundle(
             "official_dfr_balance_val": balance_val,
             "official_dfr_add_train": add_train,
             "official_dfr_num_retrains": num_retrains,
-            "official_dfr_example_weight_key": example_weight_key,
             "official_dfr_tune_val_indices": retrain_idx[balanced_retrain_idx].tolist(),
             "official_dfr_tune_val_group_counts": {
                 int(group): int(np.sum(balanced_retrain_g == group))
