@@ -1012,3 +1012,25 @@ signals. Keep this focused on what was tried and what was learned.
   while fixed `C=0.7` preserves the seed-101 lift but does not lift generated
   seed-102 or seed-103 tables. Treat this as a brittle edited-feature/C-grid
   interaction, not a robust mechanism win.
+
+## 2026-05-01: Probe-Effect Example Weighting
+
+- Added optional per-example weights to the official DFR helper: configs can
+  set `official_dfr_example_weight_key`, and that split tensor is passed through
+  both validation C-selection and final validation retrain averaging. The patch
+  probe report now attaches `intervention_effect_drop` to generated bundles and
+  writes `intervention_weighted_dfr_rows.csv` for effect, shuffled-random, and
+  inverse-effect weighting controls over selected feature views.
+- Limit384 screen over seeds `101`-`103`, 4-component best-of-K probe, zero
+  replacement, scales `1`, `2`, `4`, and `8`: high-effect weighting did not
+  improve the original-feature or original+edited-feature DFR plateau. Effect
+  scales `1` and `2` tied mean WGA `0.875`; scale `4` averaged `0.854`; scale
+  `8` averaged `0.802` on both original and original+edited views. Random and
+  inverse controls produced the only apparent single-row lifts: random scale
+  `8` on seed `101` reached WGA `0.9375` for `original_plus_edited`, while
+  inverse-effect scale `1` on seed `103` reached WGA `0.90625` on original
+  features.
+- Interpretation: the active probe's raw decision-sensitivity score is not a
+  useful validation-example upweighting signal in this compact setup. If there
+  is value in the probe, it probably needs a less direct stability objective or
+  consensus mask construction, not larger weights on high-drop examples.

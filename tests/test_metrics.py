@@ -729,6 +729,46 @@ def test_official_causal_shrink_can_change_nuisance_coefficients(tmp_path: Path)
     assert abs(float(shrunk.weight.numpy()[0, 1])) < abs(float(official.weight.numpy()[0, 1]))
 
 
+def test_official_dfr_accepts_example_weight_key(tmp_path: Path) -> None:
+    import torch
+
+    csv_path = tmp_path / "features.csv"
+    rows = [
+        "split,y,place,group,feature_0,feature_1",
+        "train,0,0,0,-1.0,0.0",
+        "train,1,1,3,1.0,0.0",
+        "val,0,0,0,-1.0,0.0",
+        "val,0,0,0,-0.8,0.2",
+        "val,1,0,1,0.8,0.1",
+        "val,1,0,1,1.0,0.3",
+        "val,0,1,2,-0.9,-0.1",
+        "val,0,1,2,-0.7,-0.2",
+        "val,1,1,3,0.7,-0.3",
+        "val,1,1,3,0.9,-0.4",
+        "test,0,0,0,-1.0,0.0",
+        "test,1,1,3,1.0,0.0",
+    ]
+    csv_path.write_text("\n".join(rows), encoding="utf-8")
+    config = {
+        "seed": 5,
+        "dataset": {"kind": "waterbirds_features", "path": str(csv_path)},
+        "method": {
+            "kind": "official_dfr_val_tr",
+            "official_dfr_c_grid": [1.0],
+            "official_dfr_num_retrains": 1,
+            "official_dfr_balance_val": True,
+            "official_dfr_example_weight_key": "official_dfr_weight",
+        },
+    }
+    bundle = load_dataset(config)
+    for split in bundle.splits.values():
+        split["official_dfr_weight"] = torch.ones(len(split["y"]), dtype=torch.float32)
+
+    weighted = fit_method(bundle, config)
+
+    assert weighted.details["official_dfr_example_weight_key"] == "official_dfr_weight"
+
+
 def test_dfr_rejects_unknown_group_weight_mode() -> None:
     config = {
         "seed": 3,
