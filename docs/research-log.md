@@ -1000,3 +1000,15 @@ signals. Keep this focused on what was tried and what was learned.
   but not stable enough for promotion. A quick attempt to add effect-drop and
   selected-component diagnostics as feature columns did not stabilize the lift,
   so that extra variant was not kept in the main workflow.
+- Root-cause diagnostic: the seed `101` lift is exactly one test example. The
+  original DFR head missed group-0 test index `4`; `original_plus_edited` with
+  the generated seed-101 table and validation-selected `C=0.7` corrected that
+  example, moving its decision margin from `+0.215` to `-0.128` and raising the
+  worst group from `28/32` to `29/32`. The concatenated table construction is
+  not the bug: metadata ordering matches, the original half of the concatenated
+  table exactly equals the original table, and original features are identical
+  across generated seeds. The lift requires both the seed-101 edited table and
+  the less-regularized DFR choice: fixed `C=1.0` falls back to WGA `0.875`,
+  while fixed `C=0.7` preserves the seed-101 lift but does not lift generated
+  seed-102 or seed-103 tables. Treat this as a brittle edited-feature/C-grid
+  interaction, not a robust mechanism win.

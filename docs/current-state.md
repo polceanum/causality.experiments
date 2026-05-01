@@ -485,8 +485,13 @@ goal, not incidental development mechanics.
   but it is not stable yet: repeating the same limit384 screen for seeds
   `101`-`103` gave `original_plus_edited` test WGA values
   `0.90625`, `0.875`, and `0.875` against original-table WGA `0.875` for all
-  three seeds. Treat this as a useful consumer direction, not a promotable full
-  benchmark result.
+  three seeds. A root-cause check found no concatenation/row-order bug: the
+  original half of `original_plus_edited` exactly matches the original table and
+  original features are identical across generated seeds. The seed-101 lift is
+  one corrected group-0 test example and requires the generated seed-101 edited
+  table plus DFR `C=0.7`; fixed `C=1.0` falls back to `0.875`, and fixed
+  `C=0.7` does not rescue generated seed-102/103 tables. Treat this as a useful
+  but brittle consumer direction, not a promotable full benchmark result.
 - The first new Track A configs are:
   - `waterbirds_features_official_adv_representation_dfr_score_gate`
   - `waterbirds_features_official_adv_representation_dfr_nuisance_regularized`
