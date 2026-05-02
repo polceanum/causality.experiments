@@ -1047,3 +1047,41 @@ signals. Keep this focused on what was tried and what was learned.
   sweet spot, but local score-source/top-k/weight tweaks do not widen the gap.
   The next serious attempt should improve the bridge target itself or feed the
   bridge into a different downstream consumer.
+
+## 2026-05-02: Refreshed Bridge-Fused Candidate
+
+- Added `scripts/run_waterbirds_bridge_causal_dfr_sweep.py`, a paired runner
+  for testing bridge-fused score files as `causal_dfr` soft nuisance priors. It
+  runs the locked official DFR baseline, matched stats controls, and bridge
+  candidates while streaming paired deltas to CSV/JSON.
+- The causal-DFR consumer was a controlled negative. On seed 101,
+  top-512 soft-score `causal_dfr` looked strong (`0.9401` at nuisance weight
+  `10`), but the three-seed check over seeds `101`-`103` collapsed to mean WGA
+  about `0.9060`. A five-retrain causal-DFR ensemble at nuisance weight `30`
+  remained below the comparator with mean WGA about `0.9195`.
+- Tried adding activation-gap/alignment fields to the bridge ranker as stronger
+  supervision. Leave-one-fixture-out quality regressed: the refreshed fixture
+  corpus gave bridge top-1 causal-target recovery `0.25` versus stats `0.625`,
+  even after ridge-alpha checks. The source feature expansion was backed out;
+  the refreshed ignored trace corpus remains a distinct experimental corpus.
+- Reran the official-shrink bridge-fused path with refreshed fixture traces.
+  The refreshed corpus used `scripts/run_llm_clue_fixture_experiments.py` with
+  the default `max_packets: 16` shape. The old `w0.2/top512` setting tied the
+  locked comparator on seed 101, so it is no longer the active refreshed-trace
+  optimum. A compact screen found `bridge_fused/w0.3/top512`, and the full
+  50-retrain seed-101 check reached test WGA `0.9376947284`, delta
+  `+0.0046729445` to official DFR and `+0.0062305331` to the stats top-512
+  control.
+- Full 50-retrain paired seeds `101`-`103` for `bridge_fused/w0.3/top512` were
+  all positive: mean WGA `0.9371755123`, mean delta `+0.0041537285` to
+  official DFR, and minimum paired delta `+0.0031152964`.
+- Extending to seeds `104` and `105` kept the candidate non-negative against
+  stats and positive against the seed-matched official baseline. Combined
+  seeds `101`-`105`: candidate mean WGA `0.9367601395`, min WGA
+  `0.9361370802`, mean delta `+0.0062305570` to official DFR, and mean delta
+  `+0.0031152844` to stats.
+- Interpretation: this is the first refreshed-trace, five-seed Waterbirds
+  bridge result with a promotion-sized gap over the locked comparator. Before
+  treating it as a benchmark headline, freeze or version the replay trace/score
+  generation and add matched random/control score checks under the same paired
+  runner.

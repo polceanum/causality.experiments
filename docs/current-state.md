@@ -23,7 +23,8 @@ what is the bar, what should be tried next, and what should not be repeated.
 
 ## Current Snapshot
 
-- Full local regression suite and GitHub Actions are green at `146` tests.
+- Full local regression suite is green at `157 passed` after the latest
+  bridge-causal runner addition.
 - The repo has a runnable PyTorch experiment harness for all eight paper
   fixtures and a local Waterbirds benchmark path.
 - Runnable methods include `constant`, `oracle`, `erm`, `dfr`, `causal_dfr`,
@@ -182,6 +183,9 @@ Current implementation:
 - `scripts/run_llm_counterfactual_clue_probe.py` writes replayable packets,
   hypotheses, test specs, measured test results, tested clue rows, bridge
   traces, and baseline comparison artifacts.
+- `scripts/run_llm_clue_fixture_experiments.py` regenerates the eight-fixture
+  replay corpus with explicit `card_top_k`/`max_packets` settings; the refreshed
+  Waterbirds bridge result uses its default `max_packets: 16` corpus shape.
 
 Fixture comparison:
 
@@ -203,26 +207,26 @@ Decision:
   ranker or contextual bandit on packet/plan/result traces, and hold out
   fixture families to test generalization.
 - First held-out bridge ranker is implemented at
-  `scripts/train_llm_clue_bridge_ranker.py`. On existing fixture artifacts it
-  beats stats-margin on candidate-packet causal-target recovery: top-1 bridge
-  `0.625` versus stats `0.500`, top-2 bridge `0.4375` versus stats `0.3125`,
-  and top-4 bridge `0.34375` versus stats `0.250`.
-- Bridge scores now feed the Waterbirds clue-fusion path as opt-in `bridge` and
-  `bridge_fused` sources. The conservative `bridge_fused` top-512 candidate
-  reached test WGA `0.9345794320` with 50 retrains, versus a fresh locked
-  official DFR comparator rerun at `0.9330217838` and a matching stats top-512
-  control at `0.9314641953`.
-- `scripts/run_waterbirds_bridge_fused_sweep.py` now runs paired bridge-fused
-  screens with streamed rows. A two-seed 50-retrain check for `w0.2/top512`
-  produced mean WGA `0.9338006079`, mean delta `+0.0007788241` to official DFR,
-  and no negative seed deltas.
-- Treat this as a paired downstream bridge improvement, not yet a benchmark
-  claim. It is still below the current promotion gate. Follow-up refinements
-  confirmed the local optimum is sharp: `bridge_fused/w0.2/top512` reproduces
-  `0.9345794320` on seed 101, while `w0.18`, `w0.22`, top-448, top-576, and the
-  stricter `bridge_gated` variant all fall back to tying or trailing the locked
-  comparator. Next improvement should target stronger bridge supervision or a
-  downstream consumer beyond final-head shrink.
+  `scripts/train_llm_clue_bridge_ranker.py`. Its historical fixture-corpus
+  result showed bridge top-1 causal-target recovery `0.625` versus stats
+  `0.500`; after refreshing the ignored fixture traces, the same evaluation
+  became bridge `0.25` versus stats `0.625`. Treat fixture trace provenance as
+  part of the experimental state, and do not compare refreshed-trace results to
+  the older held-out bridge number as if they were the same training corpus.
+- Bridge scores feed the Waterbirds clue-fusion path as opt-in `bridge`,
+  `bridge_fused`, and `bridge_gated` sources. The old `bridge_fused/w0.2/top512`
+  two-seed result was positive but small; after refreshing the replayed fixture
+  traces, `w0.2/top512` no longer beat the 50-retrain comparator on seed 101.
+- The refreshed-trace active candidate is `bridge_fused/w0.3/top512` through the
+  official causal-shrink DFR consumer. Five full 50-retrain paired seeds
+  `101`-`105` give mean candidate WGA `0.9367601395`, min WGA `0.9361370802`,
+  mean paired delta `+0.0062305570` to the seed-matched official DFR baseline,
+  and mean delta `+0.0031152844` to the stats top-512 control. All five seeds
+  are positive against the official baseline and non-negative against stats.
+- Treat `bridge_fused/w0.3/top512` as the new active Track A candidate. It has
+  crossed the earlier local promotion gap, but it still needs a reproducible
+  frozen trace/score artifact and matched random/control checks before becoming
+  a benchmark headline.
 
 ### Clue Fusion and Discovery Masks
 
@@ -235,10 +239,9 @@ Current state:
   evidence from activation alignment rather than feature names. Language-only
   top-k sets differ from stats-only sets, and fused scores inject label-aligned
   confidence while preserving some statistical margin.
-- Existing downstream consumers have not produced a stable Waterbirds win.
-  Soft-score official shrink almost tied the comparator but did not clear the
-  promotion gate, and stronger `causal_dfr` soft-score objectives failed paired
-  seed checks.
+- The refreshed bridge-fused official-shrink consumer now has a five-seed
+  positive Waterbirds signal, while stronger validation-split `causal_dfr`
+  soft-score objectives still fail paired seed checks.
 - `dfr_num_retrains` makes soft-score ensembles more stable, but not stronger
   than official DFR.
 

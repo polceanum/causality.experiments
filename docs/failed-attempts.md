@@ -175,6 +175,34 @@ issues unless they invalidate an experimental result.
   - Action: keep retrain averaging available, but move the clue priors into a
     stronger official-DFR-compatible objective rather than promoting this head.
 
+- **Bridge scores as validation-split causal DFR soft priors**
+  - Attempt: add a paired runner that feeds stats and bridge-fused score files
+    into `causal_dfr_nuisance_prior: soft_scores`, then screen nuisance weights
+    and retrain averaging against the official 50-retrain DFR comparator.
+  - Result: seed 101 looked strong (`0.9401` WGA for top-512 at nuisance weight
+    `10`), but seeds 102/103 collapsed; the three-seed mean was about `0.9060`.
+    Five DFR retrains did not rescue the path and averaged about `0.9195`.
+  - Interpretation: the validation-split causal DFR head is still too seed
+    fragile or gives up too much mean WGA, even when bridge scores are used as
+    the nuisance prior.
+  - Action: keep the runner as a diagnostic harness, but do not promote this
+    consumer. Prefer official-compatible shrink consumers unless a materially
+    stronger causal DFR objective is implemented.
+
+- **Activation-gap fields as bridge-ranker features**
+  - Attempt: add activation label/environment gaps and alignment one-hot fields
+    to bridge training rows and the ridge ranker, then refresh the offline
+    fixture traces.
+  - Result: leave-one-fixture-out causal-target recovery regressed. Bridge
+    top-1 fell to `0.25` while stats top-1 was `0.625`, and larger ridge-alpha
+    values did not recover the old behavior.
+  - Interpretation: these activation fields are too confounded in the tiny
+    fixture training corpus, or the refreshed trace corpus changed enough that
+    the earlier held-out bridge comparison is no longer apples-to-apples.
+  - Action: backed out the source feature expansion. Future bridge supervision
+    should be versioned with its trace corpus and evaluated before downstream
+    scoring.
+
 - **Official DFR soft clue shrink as an immediate promotion**
   - Attempt: add an official-DFR-compatible soft-score shrink config and run a
     paired 3-seed fused top-64 pruned clue screen.
