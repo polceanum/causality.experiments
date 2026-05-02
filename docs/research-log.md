@@ -923,3 +923,30 @@ signals. Keep this focused on what was tried and what was learned.
   not be used as the promotion bar. This validates the official reproduction
   against the recorded reference, but it is a comparator/baseline result, not a
   new proposed-method win.
+
+## 2026-05-02: Official Shrink Target Iteration
+
+- Added `scripts/run_waterbirds_official_shrink_sweep.py`, a paired sweep
+  runner for official-protocol causal-shrink DFR. It uses the same locked
+  feature table and official DFR retraining path as the comparator, writes
+  baseline/candidate paired rows to CSV, emits a JSON promotion summary, and
+  records selected C/shrink model details when available.
+- Ran an initial seed-101 target screen against
+  `official_dfr_val_tr_retrains50` with near-identity shrink grid
+  `1.0,0.99,0.975,0.95` over top-k/margin/prior variants. The screen was
+  stopped after the first several rows because it already showed no upside:
+  top-64 mask and soft-score variants tied the locked comparator at test WGA
+  `0.9330217838287354`, while top-128 mask fell to `0.9314641952514648`.
+- A tiny real-data smoke using 5-retrain shrink verified the runner and model
+  detail plumbing: top-64/margin0/mask with grid `1.0,0.95` selected shrink
+  `0.95` and reached test WGA `0.9321507811546326` versus the weaker 20-retrain
+  baseline at `0.9314641952514648`. This is a useful smoke, but it is below the
+  correct 50-retrain target and is not promotable.
+- Checked whether the official comparator itself had an easy C-grid improvement
+  by running a temporary expanded grid. It selected C `0.02` and dropped to test
+  WGA `0.914330244064331`, so the current locked comparator grid is not the
+  obvious bottleneck.
+- Interpretation: near-identity official shrink is not the path to beat the
+  `0.933` target. The next attempt should not keep tweaking final-head shrink;
+  it should change the upstream representation signal or train the clue bridge
+  so that score/mask support is better than the current stats-like priors.

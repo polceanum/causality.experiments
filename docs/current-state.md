@@ -108,6 +108,10 @@ Current state:
 - `official_causal_shrink_dfr_val_tr` is implemented and exactly recovers
   official DFR at shrink `1.0`, but gentle hard/soft shrink grids did not beat
   the 50-retrain comparator.
+- A paired official-shrink sweep runner is now available at
+  `scripts/run_waterbirds_official_shrink_sweep.py`. The first near-identity
+  shrink screen against `official_dfr_val_tr_retrains50` tied at best on
+  seed 101 and did not produce target-beating evidence.
 - Feature-swap `counterfactual_adversarial` is non-competitive on official
   features. The swap construction appears too off-manifold for deep Waterbirds
   representations.
@@ -118,6 +122,8 @@ Current state:
 Decision:
 
 - Do not spend more compute on broad unpaired `causal_dfr` or shrink grids.
+- Do not keep extending near-identity final-head shrink unless a better upstream
+  score/support source first creates clear held-out signal.
 - Any next Track A run should change the mechanism qualitatively and report
   paired deltas against `official_dfr_val_tr_retrains50`.
 

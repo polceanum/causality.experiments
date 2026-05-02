@@ -11,6 +11,7 @@ from scripts import (
     run_waterbirds_official_backbone_sweep,
     run_waterbirds_official_causal_dfr_sweep,
     run_waterbirds_official_representation_sweep,
+    run_waterbirds_official_shrink_sweep,
 )
 from scripts.prepare_waterbirds_features import PreparedWaterbirdsFeatures
 
@@ -174,6 +175,81 @@ def test_run_waterbirds_official_causal_dfr_sweep_reports_paired_deltas(tmp_path
     assert len(rows) == 5
     assert summary["candidates"][0]["count"] == 2
     assert summary["candidates"][0]["mean_delta_to_baseline"] > 0.006
+    assert summary["candidates"][0]["passes_promotion_gate"] is False
+
+
+def test_run_waterbirds_official_shrink_sweep_reports_paired_deltas(tmp_path: Path, monkeypatch) -> None:
+    baseline = tmp_path / "baseline.yaml"
+    candidate = tmp_path / "candidate.yaml"
+    _write_config(baseline, name="waterbirds_features_official_dfr_val_tr", method_kind="official_dfr_val_tr")
+    _write_config(candidate, name="waterbirds_features_official_causal_shrink_dfr_val_tr", method_kind="official_causal_shrink_dfr_val_tr")
+    features_csv = tmp_path / "features.csv"
+    features_csv.write_text("split,y,place,group,feature_0\ntrain,0,0,0,0.0\nval,0,0,0,0.0\ntest,0,0,0,0.0\n", encoding="utf-8")
+
+    def fake_load_dataset(config: dict[str, object]) -> dict[str, object]:
+        return config
+
+    def fake_fit_method(bundle: dict[str, object], config: dict[str, object]) -> dict[str, object]:
+        return config
+
+    def fake_evaluate(model: dict[str, object], bundle: dict[str, object], config: dict[str, object]) -> dict[str, float]:
+        seed = int(config["seed"])
+        method = dict(config["method"])
+        if method["kind"] == "official_dfr_val_tr":
+            test_wga = 0.90 + seed * 0.0001
+            selected_shrink = 1.0
+        else:
+            selected_shrink = min(float(value) for value in method["official_causal_shrink_grid"])
+            test_wga = 0.905 + seed * 0.0001 + (1.0 - selected_shrink) * 0.01
+        return {
+            "val/accuracy": 0.95,
+            "val/worst_group_accuracy": 0.85,
+            "test/accuracy": 0.96,
+            "test/worst_group_accuracy": test_wga,
+            "model/official_dfr_best_c": 0.1,
+            "model/official_dfr_best_feature_scale": selected_shrink,
+        }
+
+    monkeypatch.setattr(run_waterbirds_official_shrink_sweep, "load_dataset", fake_load_dataset)
+    monkeypatch.setattr(run_waterbirds_official_shrink_sweep, "fit_method", fake_fit_method)
+    monkeypatch.setattr(run_waterbirds_official_shrink_sweep, "evaluate", fake_evaluate)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_waterbirds_official_shrink_sweep.py",
+            "--baseline-config",
+            str(baseline),
+            "--candidate-config",
+            str(candidate),
+            "--dataset-path",
+            str(features_csv),
+            "--seeds",
+            "101",
+            "102",
+            "--causal-mask-top-ks",
+            "128",
+            "--causal-mask-min-margins",
+            "0.01",
+            "--shrink-priors",
+            "mask",
+            "--shrink-grid",
+            "1.0",
+            "0.9",
+            "--output-csv",
+            str(tmp_path / "shrink.csv"),
+            "--output-json",
+            str(tmp_path / "shrink.json"),
+        ],
+    )
+
+    run_waterbirds_official_shrink_sweep.main()
+
+    rows = (tmp_path / "shrink.csv").read_text(encoding="utf-8").splitlines()
+    summary = json.loads((tmp_path / "shrink.json").read_text(encoding="utf-8"))
+    assert len(rows) == 5
+    assert summary["candidates"][0]["count"] == 2
+    assert summary["candidates"][0]["mean_delta_to_baseline"] > 0.005
     assert summary["candidates"][0]["passes_promotion_gate"] is False
 
 
