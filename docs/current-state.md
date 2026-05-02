@@ -207,9 +207,15 @@ Decision:
   beats stats-margin on candidate-packet causal-target recovery: top-1 bridge
   `0.625` versus stats `0.500`, top-2 bridge `0.4375` versus stats `0.3125`,
   and top-4 bridge `0.34375` versus stats `0.250`.
-- Do not make Waterbirds downstream claims from LLM-tested clues until the
-  bridge beats stats/random controls under held-out evaluation and then improves
-  an official Waterbirds downstream consumer against the locked comparator.
+- Bridge scores now feed the Waterbirds clue-fusion path as opt-in `bridge` and
+  `bridge_fused` sources. The conservative `bridge_fused` top-512 candidate
+  reached test WGA `0.9345794320` with 50 retrains, versus a fresh locked
+  official DFR comparator rerun at `0.9330217838` and a matching stats top-512
+  control at `0.9314641953`.
+- Treat this as the first downstream bridge win, not yet a benchmark claim. It
+  is a seed-101 improvement of about `+0.00156`, below the current promotion
+  gate. Next step is paired multi-seed bridge-fused screening before changing
+  the benchmark headline.
 
 ### Clue Fusion and Discovery Masks
 

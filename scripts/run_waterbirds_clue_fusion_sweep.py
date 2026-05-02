@@ -24,11 +24,14 @@ from causality_experiments.clues import (
 from causality_experiments.config import load_config
 from causality_experiments.data import load_dataset
 from causality_experiments.discovery import build_feature_clue_rows, merge_external_clue_rows
+from causality_experiments.latent_clue_packets import build_latent_clue_packets
 from causality_experiments.run import run_experiment
 from scripts.report_clue_source_ablation import summarize_source_ablation
+from scripts.train_llm_clue_bridge_ranker import fit_bridge_ranker_from_runs, score_bridge_packets
 
 
-SOURCE_LABELS = ("stats", "language", "image", "fused")
+DEFAULT_SOURCE_LABELS = ("stats", "language", "image", "fused")
+SOURCE_LABELS = (*DEFAULT_SOURCE_LABELS, "bridge", "bridge_fused")
 
 
 def _safe_float(row: dict[str, Any], key: str) -> float:
@@ -44,6 +47,27 @@ def _safe_float(row: dict[str, Any], key: str) -> float:
 
 def _sigmoid(value: float) -> float:
     return 1.0 / (1.0 + math.exp(-value))
+
+
+def _unique_strings(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    output: list[str] = []
+    for value in values:
+        key = value.strip().lower()
+        if key and key not in seen:
+            output.append(value)
+            seen.add(key)
+    return output
+
+
+def _normalise_scores(values: list[float]) -> list[float]:
+    if not values:
+        return []
+    lo = min(values)
+    hi = max(values)
+    if hi <= lo + 1e-12:
+        return [0.5 for _ in values]
+    return [(value - lo) / (hi - lo) for value in values]
 
 
 def source_score(row: dict[str, Any], source: str) -> float:
@@ -77,6 +101,10 @@ def source_score(row: dict[str, Any], source: str) -> float:
             1e-12,
         )
         return (1.0 - evidence_weight) * stats_score + evidence_weight * clue_score
+    if source == "bridge":
+        return _safe_float(row, "bridge_score")
+    if source == "bridge_fused":
+        return _safe_float(row, "bridge_fused_score")
     raise ValueError(f"Unknown clue score source {source!r}.")
 
 
@@ -98,9 +126,43 @@ def build_source_score_rows(clue_rows: list[dict[str, Any]], source: str) -> lis
     return rows
 
 
+def build_bridge_score_rows(
+    bundle: Any,
+    *,
+    bridge_input_dir: Path,
+    alpha: float = 10.0,
+    exclude_datasets: list[str] | None = None,
+    split_name: str = "train",
+    card_top_k: int = 16,
+    blend_with_stats_weight: float | None = None,
+) -> list[dict[str, str]]:
+    packets = build_latent_clue_packets(bundle, split_name=split_name, top_k=card_top_k)
+    model = fit_bridge_ranker_from_runs(
+        bridge_input_dir,
+        alpha=alpha,
+        exclude_datasets=exclude_datasets,
+    )
+    rows = score_bridge_packets(packets, model)
+    if blend_with_stats_weight is None:
+        return rows
+    bridge_values = _normalise_scores([_safe_float(row, "score") for row in rows])
+    weight = min(max(float(blend_with_stats_weight), 0.0), 1.0)
+    blended_rows: list[dict[str, str]] = []
+    for row, packet, bridge_value in zip(rows, packets, bridge_values, strict=True):
+        stats_score = _sigmoid(6.0 * _safe_float(packet, "corr_margin"))
+        score = (1.0 - weight) * stats_score + weight * bridge_value
+        blended = dict(row)
+        blended["support_score"] = f"{score:.6f}"
+        blended["rank_score"] = f"{score:.6f}"
+        blended["score"] = f"{score:.6f}"
+        blended["score_source"] = "bridge_fused"
+        blended_rows.append(blended)
+    return blended_rows
+
+
 def resolve_sources(values: list[str] | None) -> list[str]:
     if not values:
-        return list(SOURCE_LABELS)
+        return list(DEFAULT_SOURCE_LABELS)
     sources: list[str] = []
     for value in values:
         for part in value.split(","):
@@ -241,9 +303,13 @@ def main() -> None:
     parser.add_argument("--dataset-path", default="", help="Optional feature CSV path override for the base config dataset.")
     parser.add_argument("--split", default="train")
     parser.add_argument("--top-k", type=int, action="append", default=[], help="Top-k to summarize/run. Can be passed multiple times.")
-    parser.add_argument("--sources", action="append", default=[], help="Source label(s) to emit/run: stats, language, fused. Can be comma-separated or repeated.")
+    parser.add_argument("--sources", action="append", default=[], help="Source label(s) to emit/run: stats, language, image, fused, bridge, bridge_fused. Can be comma-separated or repeated.")
     parser.add_argument("--out-dir", default="outputs/dfr_sweeps/clue_fusion", help="Directory for cards, clues, scores, ablations, and optional downstream rows.")
     parser.add_argument("--card-top-k", type=int, default=16, help="Top and bottom activation count per feature card.")
+    parser.add_argument("--bridge-input-dir", default="outputs/dfr_sweeps/llm_clue_fixture_experiments", help="Fixture trace directory used when source=bridge.")
+    parser.add_argument("--bridge-alpha", type=float, default=10.0)
+    parser.add_argument("--bridge-fused-weight", type=float, default=0.2, help="Weight on normalized bridge score for source=bridge_fused; the remainder is stats score.")
+    parser.add_argument("--bridge-exclude-dataset", action="append", default=["waterbirds"], help="Dataset-name substring to exclude from bridge training. Can be repeated.")
     parser.add_argument("--run-downstream", action="store_true", help="Run downstream top-k DFR candidates after writing source score files.")
     parser.add_argument("--prune-soft-scores", action="store_true", help="For discovery-score candidates, zero soft scores outside the selected top-k support.")
     parser.add_argument("--include-heuristic", action="store_true")
@@ -284,7 +350,19 @@ def main() -> None:
     score_paths: dict[str, Path] = {}
     for source in sources:
         score_path = out_dir / f"scores_{source}.csv"
-        write_csv_rows(score_path, build_source_score_rows(clue_rows, source))
+        if source in {"bridge", "bridge_fused"}:
+            rows = build_bridge_score_rows(
+                bundle,
+                bridge_input_dir=Path(args.bridge_input_dir),
+                alpha=float(args.bridge_alpha),
+                exclude_datasets=_unique_strings(list(args.bridge_exclude_dataset)),
+                split_name=args.split,
+                card_top_k=args.card_top_k,
+                blend_with_stats_weight=float(args.bridge_fused_weight) if source == "bridge_fused" else None,
+            )
+        else:
+            rows = build_source_score_rows(clue_rows, source)
+        write_csv_rows(score_path, rows)
         score_paths[source] = score_path
 
     ablation_rows = summarize_source_ablation(
@@ -302,6 +380,10 @@ def main() -> None:
         "split": args.split,
         "top_k": top_k_values,
         "sources": sources,
+        "bridge_input_dir": str(args.bridge_input_dir),
+        "bridge_alpha": float(args.bridge_alpha),
+        "bridge_fused_weight": float(args.bridge_fused_weight),
+        "bridge_exclude_dataset": _unique_strings(list(args.bridge_exclude_dataset)),
         "official_dfr_num_retrains": args.official_dfr_num_retrains,
         "training_device": args.training_device,
         "cards": str(cards_path),

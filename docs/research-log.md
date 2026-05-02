@@ -974,3 +974,29 @@ signals. Keep this focused on what was tried and what was learned.
   should expand packet/test coverage and then test whether bridge-ranked support
   improves official Waterbirds clue/shrink consumers against the locked
   `0.933` comparator.
+
+## 2026-05-02: Bridge-Ranked Waterbirds Downstream Consumer
+
+- Added `bridge` and `bridge_fused` as opt-in clue-fusion sources. `bridge`
+  scores target latent clue packets with a fixture-trained ranker, while
+  `bridge_fused` conservatively mixes the normalized bridge score with the
+  existing stats score. Waterbirds fixture traces are excluded from bridge
+  training by default when producing downstream Waterbirds scores.
+- Compact 5-retrain screen against the official causal-shrink consumer showed
+  that pure bridge scores were not enough: top-512 bridge reached test WGA
+  `0.9330376983`, while stats top-512 reached `0.9334811568`. The source
+  ablation showed pure bridge was selecting high label-correlation but also high
+  environment-correlation features, especially at small top-k.
+- The conservative `bridge_fused` source improved small-support downstream rows
+  in the compact screen: top-64 `0.9312638640` versus stats `0.9158878326`, and
+  top-128 `0.9325942397` versus stats `0.9312638640`. Top-512 remained slightly
+  behind stats in the compact screen.
+- Full 50-retrain check for `bridge_fused` top-512 produced test WGA
+  `0.9345794320`. A fresh rerun of the locked official DFR comparator remained
+  `0.9330217838`, and the matching 50-retrain stats top-512 control was
+  `0.9314641953`.
+- Interpretation: bridge-ranked support now improves a real Waterbirds
+  downstream consumer by about `+0.00156` WGA over the locked official DFR
+  comparator on seed 101. This is the first downstream win, but it is below the
+  existing promotion-gate margin and must be paired across more seeds before it
+  is treated as a benchmark claim.

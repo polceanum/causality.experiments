@@ -7,7 +7,7 @@ import math
 from pathlib import Path
 import statistics
 import sys
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 
@@ -25,6 +25,14 @@ FEATURE_COLUMNS = [
     "top_group_entropy",
     "label_env_disentanglement",
 ]
+
+
+class BridgeRankerModel(NamedTuple):
+    weights: np.ndarray
+    mean: np.ndarray
+    scale: np.ndarray
+    train_trace_count: int
+    run_count: int
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -100,6 +108,60 @@ def _fit_ridge(rows: list[dict[str, Any]], *, alpha: float) -> tuple[np.ndarray,
 def _predict(row: dict[str, Any], weights: np.ndarray, mean: np.ndarray, scale: np.ndarray) -> float:
     x = np.asarray(_feature_vector(row), dtype=np.float64)
     return float(((x - mean) / scale) @ weights)
+
+
+def _matches_any_dataset_name(dataset: str, patterns: list[str] | None) -> bool:
+    if not patterns:
+        return False
+    lowered = dataset.lower()
+    return any(pattern.strip().lower() in lowered for pattern in patterns if pattern.strip())
+
+
+def fit_bridge_ranker_from_runs(
+    input_dir: Path,
+    *,
+    alpha: float = 10.0,
+    exclude_datasets: list[str] | None = None,
+) -> BridgeRankerModel:
+    run_dirs = sorted(path for path in input_dir.iterdir() if path.is_dir())
+    if not run_dirs:
+        raise ValueError(f"No run directories found under {input_dir}.")
+    train_traces: list[dict[str, Any]] = []
+    included_runs = 0
+    for run_dir in run_dirs:
+        dataset = _dataset_name(run_dir)
+        if _matches_any_dataset_name(dataset, exclude_datasets):
+            continue
+        traces = _read_jsonl(run_dir / "training_traces.jsonl")
+        if traces:
+            train_traces.extend(traces)
+            included_runs += 1
+    weights, mean, scale = _fit_ridge(train_traces, alpha=alpha)
+    return BridgeRankerModel(
+        weights=weights,
+        mean=mean,
+        scale=scale,
+        train_trace_count=len(train_traces),
+        run_count=included_runs,
+    )
+
+
+def score_bridge_packets(packets: list[dict[str, Any]], model: BridgeRankerModel) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for packet in packets:
+        score = _predict(packet, model.weights, model.mean, model.scale)
+        rows.append(
+            {
+                "dataset": str(packet.get("dataset", "")),
+                "feature_index": str(packet.get("feature_index", "")),
+                "feature_name": str(packet.get("feature_name", "")),
+                "support_score": f"{score:.6f}",
+                "rank_score": f"{score:.6f}",
+                "score": f"{score:.6f}",
+                "score_source": "bridge",
+            }
+        )
+    return rows
 
 
 def _random_score(feature_index: int) -> float:
