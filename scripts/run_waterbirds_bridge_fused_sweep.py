@@ -90,6 +90,124 @@ def _safe_float(row: dict[str, Any], key: str) -> float:
     if value in (None, ""):
         return 0.0
     try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return parsed if math.isfinite(parsed) else 0.0
+
+
+def _normalise_score_map(rows: list[dict[str, str]]) -> dict[str, float]:
+    values = {row["feature_name"]: _safe_float(row, "score") for row in rows}
+    if not values:
+        return {}
+    low = min(values.values())
+    high = max(values.values())
+    if high - low < 1e-12:
+        return {key: 0.0 for key in values}
+    return {key: (value - low) / (high - low) for key, value in values.items()}
+
+
+def _is_env_dominant(clue: dict[str, Any]) -> bool:
+    return _safe_float(clue, "env_corr") >= _safe_float(clue, "label_corr")
+
+
+def build_constrained_support_score_rows(
+    *,
+    clue_rows: list[dict[str, Any]],
+    stats_rows: list[dict[str, str]],
+    candidate_rows: list[dict[str, str]],
+    top_k: int,
+    stats_core_fraction: float = 0.6,
+    env_dominant_cap: int | None = None,
+) -> list[dict[str, str]]:
+    if top_k <= 0:
+        raise ValueError("top_k must be positive for constrained support selection.")
+    stats_by_feature = {row["feature_name"]: row for row in stats_rows}
+    candidate_by_feature = {row["feature_name"]: row for row in candidate_rows}
+    clues_by_feature = {str(row.get("feature_name", "")): row for row in clue_rows}
+    stats_norm = _normalise_score_map(stats_rows)
+    candidate_norm = _normalise_score_map(candidate_rows)
+    names = [row["feature_name"] for row in candidate_rows]
+    ranked_stats = sorted(names, key=lambda name: stats_norm.get(name, 0.0), reverse=True)
+    ranked_candidates = sorted(
+        names,
+        key=lambda name: (
+            candidate_norm.get(name, 0.0) + 0.15 * stats_norm.get(name, 0.0) - (0.20 if _is_env_dominant(clues_by_feature.get(name, {})) else 0.0),
+            stats_norm.get(name, 0.0),
+        ),
+        reverse=True,
+    )
+    env_cap = max(0, int(env_dominant_cap if env_dominant_cap is not None else round(0.02 * top_k)))
+    stats_core_count = min(top_k, max(0, int(round(float(stats_core_fraction) * top_k))))
+    selected: list[str] = []
+    selected_set: set[str] = set()
+    env_count = 0
+
+    def try_add(name: str, *, enforce_env_cap: bool) -> bool:
+        nonlocal env_count
+        if name in selected_set:
+            return False
+        clue = clues_by_feature.get(name, {})
+        env_dominant = _is_env_dominant(clue)
+        if enforce_env_cap and env_dominant and env_count >= env_cap:
+            return False
+        selected.append(name)
+        selected_set.add(name)
+        if env_dominant:
+            env_count += 1
+        return True
+
+    for name in ranked_stats:
+        if len(selected) >= stats_core_count:
+            break
+        try_add(name, enforce_env_cap=True)
+
+    for name in ranked_candidates:
+        if len(selected) >= top_k:
+            break
+        try_add(name, enforce_env_cap=True)
+
+    for name in ranked_stats:
+        if len(selected) >= top_k:
+            break
+        try_add(name, enforce_env_cap=False)
+
+    selected_rank = {name: index for index, name in enumerate(selected[:top_k])}
+    rows: list[dict[str, str]] = []
+    denominator = max(len(selected_rank), 1)
+    for name in names:
+        source = candidate_by_feature.get(name, stats_by_feature.get(name, {}))
+        if name in selected_rank:
+            score = 2.0 + (denominator - selected_rank[name]) / denominator
+        else:
+            score = 0.1 * (candidate_norm.get(name, 0.0) + stats_norm.get(name, 0.0))
+        updated = dict(source)
+        updated["support_score"] = f"{score:.6f}"
+        updated["rank_score"] = f"{score:.6f}"
+        updated["score"] = f"{score:.6f}"
+        updated["score_source"] = "constrained_support"
+        rows.append(updated)
+    return rows
+
+
+def _constrained_variant_params(variant_key: str, top_k: int) -> tuple[float, int]:
+    if variant_key == "constrained_support_strict":
+        return 0.75, max(1, round(0.01 * top_k))
+    if variant_key == "constrained_support_loose":
+        return 0.45, max(1, round(0.04 * top_k))
+    if variant_key == "constrained_support_bridge":
+        return 0.30, max(1, round(0.02 * top_k))
+    return 0.60, max(1, round(0.02 * top_k))
+
+
+def _is_constrained_support_variant(variant_key: str) -> bool:
+    return variant_key in {
+        "constrained_support",
+        "constrained_support_strict",
+        "constrained_support_loose",
+        "constrained_support_bridge",
+    }
+    try:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
@@ -326,11 +444,33 @@ def run_bridge_fused_sweep(
                     "stats_anchor",
                     "score_sqrt",
                     "score_square",
+                    "constrained_support",
+                    "constrained_support_strict",
+                    "constrained_support_loose",
+                    "constrained_support_bridge",
                 }:
                     raise ValueError(
                         "support variants must be one of: env_filter, margin_gate, stats_fill, "
-                        "soft_env_penalty, stats_anchor, score_sqrt, score_square."
+                        "soft_env_penalty, stats_anchor, score_sqrt, score_square, constrained_support, "
+                        "constrained_support_strict, constrained_support_loose, constrained_support_bridge."
                     )
+                if _is_constrained_support_variant(variant_key):
+                    for top_k in top_k_values:
+                        stats_core_fraction, env_dominant_cap = _constrained_variant_params(variant_key, int(top_k))
+                        variant_path = out_dir / f"scores_{source}_{_weight_label(weight)}_{variant_key}_top{top_k}.csv"
+                        write_csv_rows(
+                            variant_path,
+                            build_constrained_support_score_rows(
+                                clue_rows=clue_rows,
+                                stats_rows=stats_rows,
+                                candidate_rows=bridge_rows,
+                                top_k=top_k,
+                                stats_core_fraction=stats_core_fraction,
+                                env_dominant_cap=env_dominant_cap,
+                            ),
+                        )
+                        bridge_paths[(weight, variant_key, int(top_k))] = variant_path
+                    continue
                 variant_path = out_dir / f"scores_{source}_{_weight_label(weight)}_{variant_key}.csv"
                 write_csv_rows(
                     variant_path,
@@ -450,23 +590,38 @@ def run_bridge_fused_sweep(
                 )
             )
 
-        candidate_items: list[tuple[float, str, Path, float | None]] = []
+        candidate_items: list[tuple[float, str, Path, float | None, int | None]] = []
         for weight in bridge_fused_weights:
-            candidate_items.append((weight, f"{source}_{_weight_label(weight)}", bridge_paths[weight], weight))
+            candidate_items.append((weight, f"{source}_{_weight_label(weight)}", bridge_paths[weight], weight, None))
             if source == "bridge_fused":
                 for variant in support_variants:
                     variant_key = variant.strip().lower()
-                    candidate_items.append(
-                        (
-                            weight,
-                            f"{source}_{_weight_label(weight)}_{variant_key}",
-                            bridge_paths[(weight, variant_key)],
-                            weight,
+                    if _is_constrained_support_variant(variant_key):
+                        for top_k in top_k_values:
+                            candidate_items.append(
+                                (
+                                    weight,
+                                    f"{source}_{_weight_label(weight)}_{variant_key}",
+                                    bridge_paths[(weight, variant_key, int(top_k))],
+                                    weight,
+                                    int(top_k),
+                                )
+                            )
+                    else:
+                        candidate_items.append(
+                            (
+                                weight,
+                                f"{source}_{_weight_label(weight)}_{variant_key}",
+                                bridge_paths[(weight, variant_key)],
+                                weight,
+                                None,
+                            )
                         )
-                    )
 
         for seed, top_k, candidate_item in itertools.product(seeds, top_k_values, candidate_items):
-            _weight, label, score_path, row_weight = candidate_item
+            _weight, label, score_path, row_weight, item_top_k = candidate_item
+            if item_top_k is not None and item_top_k != top_k:
+                continue
             config = build_downstream_candidate(
                 {**copy.deepcopy(candidate_base), "seed": seed},
                 label=source,

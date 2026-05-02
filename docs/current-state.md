@@ -282,6 +282,16 @@ Decision:
   `+0.0006651878` to stats, but only `1/2` non-negative deltas against the best
   random control. This is useful auxiliary signal, but weaker than the active
   `bridge_fused/w0.3/top512` candidate and not a promotion candidate.
+- A constrained support optimizer is now available as an opt-in
+  `bridge_fused` support variant family: `constrained_support`,
+  `constrained_support_strict`, `constrained_support_loose`, and
+  `constrained_support_bridge`. These variants explicitly preserve a stats core,
+  fill remaining support with bridge-ranked features, and cap env-dominant
+  additions. The compact paired two-seed screen did not improve over the
+  incumbent: `constrained_support_loose` tied `bridge_fused/w0.3/top512`
+  exactly at mean test WGA `0.9352525771`, while stricter variants regressed
+  and failed the best-random gate on one seed. Keep the optimizer as a harness
+  for future artifact-risk/active-boundary ideas, not as a promoted candidate.
 
 ### Clue Fusion and Discovery Masks
 
@@ -365,6 +375,9 @@ Decision:
      supervised auxiliary scorer or fusion term, not as standalone RL.
    - Do not full-budget promote `policy_fused/w0.5/top512` unless it first
      clears best-random controls in a stronger compact paired screen.
+   - Do not full-budget promote the current constrained-support variants. The
+     loose variant simply recovers the incumbent compact result; stricter
+     variants lose too much bridge support.
    - Do not re-add raw activation-gap fields directly without a versioned corpus
      and held-out win.
 

@@ -106,7 +106,7 @@ def test_bridge_fused_sweep_reports_paired_deltas(tmp_path: Path, monkeypatch) -
         seeds=[101],
         top_k_values=[1],
         bridge_fused_weights=[0.2],
-        support_variants=["env_filter", "soft_env_penalty", "score_square"],
+        support_variants=["env_filter", "soft_env_penalty", "score_square", "constrained_support", "constrained_support_bridge"],
         bridge_score_source="bridge_fused",
         bridge_alpha=10.0,
         bridge_exclude_datasets=[],
@@ -129,9 +129,13 @@ def test_bridge_fused_sweep_reports_paired_deltas(tmp_path: Path, monkeypatch) -
     assert "bridge_fused_w0p2_env_filter_top1" in labels
     assert "bridge_fused_w0p2_soft_env_penalty_top1" in labels
     assert "bridge_fused_w0p2_score_square_top1" in labels
+    assert "bridge_fused_w0p2_constrained_support_top1" in labels
+    assert "bridge_fused_w0p2_constrained_support_bridge_top1" in labels
     assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_env_filter.csv").exists()
     assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_soft_env_penalty.csv").exists()
     assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_score_square.csv").exists()
+    assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_constrained_support_top1.csv").exists()
+    assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_constrained_support_bridge_top1.csv").exists()
     random_summary = summary["random_controls"][0]
     assert random_summary["label"] == "random_score_0_top1"
 
@@ -211,3 +215,38 @@ def test_bridge_fused_sweep_can_use_policy_fused_source(tmp_path: Path, monkeypa
     labels = {candidate["label"] for candidate in summary["candidates"]}
     assert "policy_fused_w0p5_top1" in labels
     assert (tmp_path / "scores" / "scores_policy_fused_w0p5.csv").exists()
+
+
+def test_constrained_support_preserves_stats_core_and_caps_env_risk() -> None:
+    clue_rows = [
+        {"feature_name": "stats_good", "label_corr": "0.9", "env_corr": "0.1"},
+        {"feature_name": "bridge_good", "label_corr": "0.8", "env_corr": "0.2"},
+        {"feature_name": "env_risk", "label_corr": "0.1", "env_corr": "0.9"},
+        {"feature_name": "safe_fill", "label_corr": "0.7", "env_corr": "0.1"},
+    ]
+    stats_rows = [
+        {"feature_name": "stats_good", "score": "1.0"},
+        {"feature_name": "env_risk", "score": "0.8"},
+        {"feature_name": "safe_fill", "score": "0.7"},
+        {"feature_name": "bridge_good", "score": "0.1"},
+    ]
+    bridge_rows = [
+        {"feature_name": "env_risk", "score": "1.0"},
+        {"feature_name": "bridge_good", "score": "0.9"},
+        {"feature_name": "safe_fill", "score": "0.4"},
+        {"feature_name": "stats_good", "score": "0.3"},
+    ]
+
+    rows = sweep.build_constrained_support_score_rows(
+        clue_rows=clue_rows,
+        stats_rows=stats_rows,
+        candidate_rows=bridge_rows,
+        top_k=2,
+        stats_core_fraction=0.5,
+        env_dominant_cap=0,
+    )
+
+    selected = [row["feature_name"] for row in sorted(rows, key=lambda row: float(row["score"]), reverse=True)[:2]]
+    assert selected == ["stats_good", "bridge_good"]
+    assert "env_risk" not in selected
+    assert {row["score_source"] for row in rows} == {"constrained_support"}

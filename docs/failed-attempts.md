@@ -217,6 +217,19 @@ issues unless they invalidate an experimental result.
   - Action: do not run a full 50-retrain promotion for this variant. Use it as
     an ingredient for future bridge-policy hybrids or better rank objectives.
 
+- **Constrained support optimizer as an immediate margin widener**
+  - Attempt: construct top-512 support directly by preserving a stats core,
+    filling with bridge-ranked features, and capping env-dominant additions.
+  - Result: the loose constrained variant tied the incumbent bridge-fused
+    compact result exactly, while stricter variants regressed and failed the
+    best-random gate on one of two compact seeds.
+  - Interpretation: constrained support selection is useful infrastructure, but
+    fixed stats-core/env-cap rules either reconstruct the incumbent or remove
+    too much bridge support.
+  - Action: do not promote these fixed variants. Reuse the harness only if the
+    constraint is driven by a learned artifact-risk head or active boundary
+    tests.
+
 - **Activation-gap fields as bridge-ranker features**
   - Attempt: add activation label/environment gaps and alignment one-hot fields
     to bridge training rows and the ridge ranker, then refresh the offline

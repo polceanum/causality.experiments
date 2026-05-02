@@ -113,6 +113,32 @@ signals. Keep this focused on what was tried and what was learned.
   promising auxiliary signal, but the active `bridge_fused/w0.3/top512`
   candidate remains stronger and better controlled.
 
+## 2026-05-02: Constrained Support Optimizer
+
+- Added an opt-in constrained support selector to
+  `scripts/run_waterbirds_bridge_fused_sweep.py`. The selector is top-k aware:
+  it preserves a stats-ranked core, fills the remaining support with
+  bridge-ranked features, caps env-dominant additions, and emits a score file
+  whose selected top-k exactly matches the constructed support.
+- Added four variants for compact screening: default `constrained_support`,
+  `constrained_support_strict`, `constrained_support_loose`, and
+  `constrained_support_bridge`. Focused tests cover paired-runner integration
+  and the env-risk cap behavior.
+- Compact paired two-seed, five-retrain screen at `w0.3/top512`: loose
+  constrained support tied the incumbent `bridge_fused/w0.3/top512` exactly
+  with mean WGA `0.9352525771`, mean delta `+0.0025526583` to official DFR,
+  mean delta `+0.0012222826` to stats, and non-negative best-random deltas on
+  `2/2` seeds. Strict and bridge-leaning variants regressed to mean WGA
+  `0.9342520237` and were non-negative against best-random on only `1/2`
+  seeds.
+- Support overlap diagnostics explain the tie/regression: loose constrained
+  support overlaps the incumbent on `438/512` features (`0.7474` Jaccard), while
+  strict overlaps stats much more heavily (`422/512`, `0.7010` Jaccard) and
+  loses bridge support. Interpretation: simple constrained support construction
+  is safe but does not yet add information beyond the incumbent; the next use
+  should be artifact-risk or active-boundary replacement, not more fixed core
+  fractions.
+
 ## 2026-04-22
 
 - Read the source document, which is a survey and experiment blueprint rather
