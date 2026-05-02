@@ -59,6 +59,32 @@ signals. Keep this focused on what was tried and what was learned.
   `w0.3/top512`. The next improvement branch should change bridge supervision
   or the official-compatible consumer objective more substantially.
 
+## 2026-05-02: Offline RL Clue Policy Substrate
+
+- Added `causality_experiments.rl_clue_policy`, which turns replayed latent
+  clue packets, planner/test traces, and feature clue rows into explicit reward
+  rows. Reward rows record schema version, dataset, reward scope,
+  trainability, packet/action identity, immediate test reward, score-delta
+  reward, control-pass reward, hypothesis reward, causal-target reward, and
+  total reward.
+- Added a hard training guardrail: rows marked as benchmark-final or Waterbirds
+  test-scope rewards are not trainable and are rejected before fitting. The
+  current reward table uses fixture/test-result artifacts only; final
+  Waterbirds test WGA remains a reporting metric, not a trainable reward.
+- Added `scripts/train_llm_clue_policy.py`, a leave-one-fixture-out evaluator
+  for a small ridge value policy over packet/action features. It writes a
+  reward CSV plus held-out recovery CSV/JSON and reports raw policy, stats,
+  deterministic random, and normalized policy/stat fusions.
+- Refreshed trace result, alpha `10`, top-k `1/2/4`: raw
+  `offline_clue_policy` reached causal-target recovery `0.25/0.3125/0.28125`,
+  below stats top-1 (`0.625/0.3125/0.28125`) but above random
+  (`0.0/0.125/0.125`). Conservative `policy_stats_fused_w0.3` preserved stats
+  top-1 at `0.625` and improved top-2/top-4 to `0.375`/`0.34375`.
+- Interpretation: the RL reward substrate is now present, but naive offline
+  value regression should not be promoted by itself. The useful next branch is
+  pairwise/listwise or artifact-risk-aware training over the same reward table,
+  with policy/stat fusion used as a conservative diagnostic candidate.
+
 ## 2026-04-22
 
 - Read the source document, which is a survey and experiment blueprint rather

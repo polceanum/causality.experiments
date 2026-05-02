@@ -11,7 +11,15 @@ from causality_experiments.llm_clue_planner import (
     plan_from_backend,
     render_planner_prompt,
 )
+from causality_experiments.rl_clue_policy import (
+    assert_no_benchmark_final_training,
+    build_clue_reward_rows,
+    clue_reward_row,
+    score_policy_packets,
+    train_offline_clue_policy,
+)
 from scripts.run_llm_counterfactual_clue_probe import run_llm_counterfactual_clue_probe
+from scripts.train_llm_clue_policy import run_clue_policy_training
 from scripts.train_llm_clue_bridge_ranker import run_bridge_ranker
 
 
@@ -137,6 +145,96 @@ def test_bridge_training_rows_create_targets_from_packets_and_results(tmp_path: 
     assert by_feature["background_0"]["target_hypothesis_label"] == "nuisance"
 
 
+def test_clue_reward_rows_expose_trainable_offline_rewards(tmp_path: Path) -> None:
+    csv_path = tmp_path / "features.csv"
+    _write_waterbirds_features(csv_path)
+    packets = build_latent_clue_packets(_load_bundle(csv_path), top_k=2)
+    good_packet = next(packet for packet in packets if packet["feature_name"] == "bird_shape_0")
+    trace = {
+        "candidate_id": good_packet["candidate_id"],
+        "feature_name": good_packet["feature_name"],
+        "action": "feature_mean_ablation",
+        "test_value": 0.4,
+        "score_delta": 0.2,
+        "passed_control": True,
+        "hypothesis_correct": True,
+    }
+
+    rows = build_clue_reward_rows(
+        packets=packets,
+        traces=[trace],
+        feature_clues={"bird_shape_0": {"causal_target": "1.0"}},
+        dataset="fixture",
+    )
+
+    assert rows[0]["reward_schema_version"] == "rl_clue_reward/v1"
+    assert rows[0]["trainable_reward"] is True
+    assert rows[0]["total_reward"] > rows[0]["test_reward"]
+
+
+def test_clue_reward_rows_block_benchmark_final_training() -> None:
+    row = clue_reward_row(
+        packet={"feature_name": "feature_0", "label_corr": 1.0, "env_corr": 0.0},
+        trace={"action": "feature_mean_ablation"},
+        reward_scope="benchmark_final",
+    )
+
+    try:
+        assert_no_benchmark_final_training([row])
+    except ValueError as exc:
+        assert "Benchmark-final" in str(exc)
+    else:
+        raise AssertionError("Expected benchmark-final rewards to be blocked from policy training.")
+
+    try:
+        train_offline_clue_policy([row])
+    except ValueError as exc:
+        assert "Benchmark-final" in str(exc)
+    else:
+        raise AssertionError("Expected policy training to reject benchmark-final rewards.")
+
+
+def test_offline_clue_policy_scores_packets_by_rewarded_actions(tmp_path: Path) -> None:
+    good = {
+        "feature_index": 0,
+        "feature_name": "feature_good",
+        "label_corr": 0.9,
+        "env_corr": 0.1,
+        "corr_margin": 0.8,
+        "abs_corr_margin": 0.8,
+        "uncertainty": 0.1,
+        "top_group_entropy": 0.2,
+        "label_env_disentanglement": 0.8,
+    }
+    bad = {
+        "feature_index": 1,
+        "feature_name": "feature_bad",
+        "label_corr": 0.1,
+        "env_corr": 0.8,
+        "corr_margin": -0.7,
+        "abs_corr_margin": 0.7,
+        "uncertainty": 0.9,
+        "top_group_entropy": 0.8,
+        "label_env_disentanglement": 0.1,
+    }
+    rows = [
+        clue_reward_row(
+            packet=good,
+            trace={"action": "feature_mean_ablation", "test_value": 1.0, "score_delta": 0.5, "passed_control": True},
+        ),
+        clue_reward_row(
+            packet=bad,
+            trace={"action": "donor_swap_same_label_diff_env", "test_value": 0.0, "score_delta": 0.0},
+        ),
+    ]
+
+    policy = train_offline_clue_policy(rows, alpha=0.1)
+    scores = score_policy_packets([good, bad], policy)
+    by_feature = {row["feature_name"]: float(row["score"]) for row in scores}
+
+    assert by_feature["feature_good"] > by_feature["feature_bad"]
+
+
 def test_counterfactual_clue_tests_execute_model_effects_and_controls(tmp_path: Path) -> None:
     csv_path = tmp_path / "features.csv"
     _write_waterbirds_features(csv_path)
@@ -253,3 +351,50 @@ def test_bridge_ranker_evaluates_heldout_packet_candidates(tmp_path: Path) -> No
     assert (tmp_path / "ranker.csv").exists()
     bridge = next(row for row in summary["by_label_top_k"] if row["label"] == "bridge_ranker")
     assert bridge["mean_causal_target"] == 1.0
+
+
+def test_offline_clue_policy_evaluates_heldout_packet_candidates(tmp_path: Path) -> None:
+    root = tmp_path / "policy_runs"
+    for name in ("train_a", "heldout_b"):
+        run_dir = root / name
+        run_dir.mkdir(parents=True)
+        (run_dir / "manifest.json").write_text(
+            f'{{"config": "configs/experiments/{name}.yaml"}}',
+            encoding="utf-8",
+        )
+        (run_dir / "training_traces.jsonl").write_text(
+            "\n".join(
+                [
+                    '{"candidate_id":"good","feature_name":"feature_good","action":"feature_mean_ablation","label_corr":0.9,"env_corr":0.1,"corr_margin":0.8,"abs_corr_margin":0.8,"uncertainty":0.1,"top_group_entropy":0.2,"label_env_disentanglement":0.8,"test_value":1.0,"score_delta":0.5,"hypothesis_correct":true,"passed_control":true}',
+                    '{"candidate_id":"bad","feature_name":"feature_bad","action":"donor_swap_same_label_diff_env","label_corr":0.1,"env_corr":0.8,"corr_margin":-0.7,"abs_corr_margin":0.7,"uncertainty":0.9,"top_group_entropy":0.8,"label_env_disentanglement":0.1,"test_value":0.0,"score_delta":0.0,"hypothesis_correct":false,"passed_control":false}',
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (run_dir / "latent_clue_packets.jsonl").write_text(
+            "\n".join(
+                [
+                    '{"candidate_id":"good","feature_index":0,"feature_name":"feature_good","label_corr":0.9,"env_corr":0.1,"corr_margin":0.8,"abs_corr_margin":0.8,"uncertainty":0.1,"top_group_entropy":0.2,"label_env_disentanglement":0.8,"causal_target":1.0}',
+                    '{"candidate_id":"bad","feature_index":1,"feature_name":"feature_bad","label_corr":0.1,"env_corr":0.8,"corr_margin":-0.7,"abs_corr_margin":0.7,"uncertainty":0.9,"top_group_entropy":0.8,"label_env_disentanglement":0.1,"causal_target":0.0}',
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (run_dir / "feature_clues.csv").write_text(
+            "feature_name,causal_target\nfeature_good,1.0\nfeature_bad,0.0\n",
+            encoding="utf-8",
+        )
+
+    summary = run_clue_policy_training(
+        input_dir=root,
+        reward_csv=tmp_path / "rewards.csv",
+        output_csv=tmp_path / "policy.csv",
+        output_json=tmp_path / "policy.json",
+        top_k_values=[1],
+    )
+
+    assert (tmp_path / "rewards.csv").exists()
+    policy = next(row for row in summary["by_label_top_k"] if row["label"] == "offline_clue_policy")
+    fused = next(row for row in summary["by_label_top_k"] if row["label"] == "policy_stats_fused_w0.3")
+    assert policy["mean_causal_target"] == 1.0
+    assert fused["mean_causal_target"] == 1.0

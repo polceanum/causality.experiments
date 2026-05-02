@@ -189,6 +189,21 @@ issues unless they invalidate an experimental result.
     consumer. Prefer official-compatible shrink consumers unless a materially
     stronger causal DFR objective is implemented.
 
+- **Naive offline clue value policy as a standalone ranker**
+  - Attempt: train a ridge contextual-bandit value policy from replayed clue
+    packet/action reward rows, then rank held-out fixture packets by predicted
+    best action value.
+  - Result: on the refreshed trace snapshot, alpha `10` raw policy top-1
+    causal-target recovery was `0.25`, below the stats-margin baseline at
+    `0.625`. It was non-random and useful at wider supports, but not a
+    standalone replacement for stats or the current bridge-fused candidate.
+  - Interpretation: the reward table is useful infrastructure, but simple
+    scalar value regression over tiny logged traces overfits action/fixture
+    artifacts and does not yet learn a general clue proposer.
+  - Action: do not promote raw offline policy. Continue with conservative
+    policy/stat fusion and upgrade training to pairwise/listwise or
+    artifact-risk-aware objectives before downstream Waterbirds promotion.
+
 - **Activation-gap fields as bridge-ranker features**
   - Attempt: add activation label/environment gaps and alignment one-hot fields
     to bridge training rows and the ridge ranker, then refresh the offline

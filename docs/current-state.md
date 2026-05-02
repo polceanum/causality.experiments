@@ -57,6 +57,7 @@ conda run -n orpheus python scripts/run_waterbirds_official_representation_sweep
 conda run -n orpheus python scripts/run_waterbirds_official_backbone_sweep.py
 conda run -n orpheus python scripts/run_waterbirds_clue_seed_stability.py
 conda run -n orpheus python scripts/run_llm_counterfactual_clue_probe.py --config configs/experiments/01_synthetic_linear.yaml --llm-backend mock
+conda run -n orpheus python scripts/train_llm_clue_policy.py --input-dir outputs/dfr_sweeps/llm_clue_fixture_experiments_20260502_refreshed
 conda run -n orpheus python scripts/report_waterbirds_bridge_candidate.py
 conda run -n orpheus python scripts/report_waterbirds_bridge_support.py
 ```
@@ -260,6 +261,18 @@ Decision:
   mean WGA `0.9361370683` versus incumbent `0.9367601395`, with only `3/5`
   non-negative deltas against the best random control. Softer penalties and
   monotone score-shape transforms did not create a larger compact margin.
+- The first RL/contextual-bandit slice is implemented in
+  `causality_experiments.rl_clue_policy` and
+  `scripts/train_llm_clue_policy.py`. It builds explicit offline reward rows
+  from packet/trace/clue artifacts, marks reward scope and trainability, blocks
+  benchmark-final/test reward rows from training, and evaluates a ridge value
+  policy leave-one-fixture-out. On the refreshed trace snapshot with alpha
+  `10`, raw policy top-1 causal recovery is weak (`0.25` versus stats `0.625`),
+  but conservative normalized policy/stat fusion at `w=0.3` preserves stats
+  top-1 (`0.625`) and improves top-2/top-4 recovery (`0.375`/`0.34375` versus
+  stats `0.3125`/`0.28125`). Treat the fused policy as a development signal,
+  not a Waterbirds promotion candidate until it clears a downstream compact
+  screen.
 
 ### Clue Fusion and Discovery Masks
 
@@ -335,9 +348,12 @@ Decision:
      the official-compatible consumer more substantially than score reshaping.
 
 3. Improve bridge supervision only behind held-out gates.
-   - Try pairwise/listwise ranking or a two-stage artifact-risk bridge, but
-     require held-out fixture improvement or a compact Waterbirds screen before
-     50-retrain promotion.
+   - Extend the new offline reward table toward pairwise/listwise ranking or a
+     two-stage artifact-risk bridge, but require held-out fixture improvement or
+     a compact Waterbirds screen before 50-retrain promotion.
+   - Keep raw offline policy below promotion until it beats stats on held-out
+     fixture top-1; the current useful signal is only the conservative
+     policy/stat fusion.
    - Do not re-add raw activation-gap fields directly without a versioned corpus
      and held-out win.
 
