@@ -202,8 +202,14 @@ Decision:
 - Next implementation layer: add a replay backend, train/evaluate a small
   ranker or contextual bandit on packet/plan/result traces, and hold out
   fixture families to test generalization.
+- First held-out bridge ranker is implemented at
+  `scripts/train_llm_clue_bridge_ranker.py`. On existing fixture artifacts it
+  beats stats-margin on candidate-packet causal-target recovery: top-1 bridge
+  `0.625` versus stats `0.500`, top-2 bridge `0.4375` versus stats `0.3125`,
+  and top-4 bridge `0.34375` versus stats `0.250`.
 - Do not make Waterbirds downstream claims from LLM-tested clues until the
-  bridge beats stats/random controls under held-out evaluation.
+  bridge beats stats/random controls under held-out evaluation and then improves
+  an official Waterbirds downstream consumer against the locked comparator.
 
 ### Clue Fusion and Discovery Masks
 

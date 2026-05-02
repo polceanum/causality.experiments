@@ -950,3 +950,27 @@ signals. Keep this focused on what was tried and what was learned.
   `0.933` target. The next attempt should not keep tweaking final-head shrink;
   it should change the upstream representation signal or train the clue bridge
   so that score/mask support is better than the current stats-like priors.
+
+## 2026-05-02: Held-Out LLM Clue Bridge Ranker
+
+- Added `scripts/train_llm_clue_bridge_ranker.py`, a local ridge-ranker
+  evaluator for the LLM clue bridge. It trains on packet/plan/result traces
+  from all but one fixture, scores the held-out fixture's latent clue packets,
+  and compares bridge, stats-margin, and deterministic-random rankings on the
+  same candidate packet set.
+- The first leave-one-fixture-out run used existing artifacts under
+  `outputs/dfr_sweeps/llm_clue_fixture_experiments/` and `alpha=10.0`. Mean
+  known causal-target recovery across eight held-out fixtures was:
+  - top-1: bridge `0.625`, stats-margin `0.500`, random `0.000`.
+  - top-2: bridge `0.4375`, stats-margin `0.3125`, random `0.125`.
+  - top-4: bridge `0.34375`, stats-margin `0.250`, random `0.125`.
+- Per-fixture top-1 signal is encouraging but uneven. The bridge matched stats
+  on the simple tabular and Waterbirds fixtures, missed Dsprites and text-toy,
+  but recovered the known causal feature on shapes-spurious and fewshot-NER
+  where stats-margin selected non-causal shortcut features.
+- Interpretation: this is the first held-out evidence that the trainable bridge
+  can beat stats on candidate packet ranking. It is still fixture-level and
+  small-data evidence, not a Waterbirds downstream claim. The next bridge step
+  should expand packet/test coverage and then test whether bridge-ranked support
+  improves official Waterbirds clue/shrink consumers against the locked
+  `0.933` comparator.

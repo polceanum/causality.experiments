@@ -12,6 +12,7 @@ from causality_experiments.llm_clue_planner import (
     render_planner_prompt,
 )
 from scripts.run_llm_counterfactual_clue_probe import run_llm_counterfactual_clue_probe
+from scripts.train_llm_clue_bridge_ranker import run_bridge_ranker
 
 
 def _write_waterbirds_features(path: Path) -> None:
@@ -208,3 +209,47 @@ def test_llm_counterfactual_clue_probe_runner_writes_replayable_artifacts(tmp_pa
     assert "llm_tested" in comparison
     assert "stats" in comparison
     assert "random" in comparison
+
+
+def test_bridge_ranker_evaluates_heldout_packet_candidates(tmp_path: Path) -> None:
+    root = tmp_path / "bridge_runs"
+    for name, good_feature in (("train_a", "feature_good"), ("heldout_b", "feature_good")):
+        run_dir = root / name
+        run_dir.mkdir(parents=True)
+        (run_dir / "manifest.json").write_text(
+            f'{{"config": "configs/experiments/{name}.yaml"}}',
+            encoding="utf-8",
+        )
+        (run_dir / "training_traces.jsonl").write_text(
+            "\n".join(
+                [
+                    '{"feature_name":"feature_good","label_corr":0.9,"env_corr":0.1,"corr_margin":0.8,"abs_corr_margin":0.8,"uncertainty":0.1,"top_group_entropy":0.2,"label_env_disentanglement":0.8,"test_value":1.0,"score_delta":0.5,"hypothesis_correct":true,"passed_control":true}',
+                    '{"feature_name":"feature_bad","label_corr":0.1,"env_corr":0.8,"corr_margin":-0.7,"abs_corr_margin":0.7,"uncertainty":0.9,"top_group_entropy":0.8,"label_env_disentanglement":0.1,"test_value":0.0,"score_delta":0.0,"hypothesis_correct":false,"passed_control":false}',
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (run_dir / "latent_clue_packets.jsonl").write_text(
+            "\n".join(
+                [
+                    '{"feature_index":0,"feature_name":"feature_good","label_corr":0.9,"env_corr":0.1,"corr_margin":0.8,"abs_corr_margin":0.8,"uncertainty":0.1,"top_group_entropy":0.2,"label_env_disentanglement":0.8,"causal_target":1.0}',
+                    '{"feature_index":1,"feature_name":"feature_bad","label_corr":0.1,"env_corr":0.8,"corr_margin":-0.7,"abs_corr_margin":0.7,"uncertainty":0.9,"top_group_entropy":0.8,"label_env_disentanglement":0.1,"causal_target":0.0}',
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (run_dir / "feature_clues.csv").write_text(
+            "feature_name,causal_target\nfeature_good,1.0\nfeature_bad,0.0\n",
+            encoding="utf-8",
+        )
+
+    summary = run_bridge_ranker(
+        input_dir=root,
+        output_csv=tmp_path / "ranker.csv",
+        output_json=tmp_path / "ranker.json",
+        top_k_values=[1],
+    )
+
+    assert (tmp_path / "ranker.csv").exists()
+    bridge = next(row for row in summary["by_label_top_k"] if row["label"] == "bridge_ranker")
+    assert bridge["mean_causal_target"] == 1.0
