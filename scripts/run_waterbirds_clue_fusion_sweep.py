@@ -31,7 +31,7 @@ from scripts.train_llm_clue_bridge_ranker import fit_bridge_ranker_from_runs, sc
 
 
 DEFAULT_SOURCE_LABELS = ("stats", "language", "image", "fused")
-SOURCE_LABELS = (*DEFAULT_SOURCE_LABELS, "bridge", "bridge_fused")
+SOURCE_LABELS = (*DEFAULT_SOURCE_LABELS, "bridge", "bridge_fused", "bridge_gated")
 
 
 def _safe_float(row: dict[str, Any], key: str) -> float:
@@ -105,6 +105,8 @@ def source_score(row: dict[str, Any], source: str) -> float:
         return _safe_float(row, "bridge_score")
     if source == "bridge_fused":
         return _safe_float(row, "bridge_fused_score")
+    if source == "bridge_gated":
+        return _safe_float(row, "bridge_gated_score")
     raise ValueError(f"Unknown clue score source {source!r}.")
 
 
@@ -135,6 +137,7 @@ def build_bridge_score_rows(
     split_name: str = "train",
     card_top_k: int = 16,
     blend_with_stats_weight: float | None = None,
+    blend_mode: str = "linear",
 ) -> list[dict[str, str]]:
     packets = build_latent_clue_packets(bundle, split_name=split_name, top_k=card_top_k)
     model = fit_bridge_ranker_from_runs(
@@ -147,15 +150,23 @@ def build_bridge_score_rows(
         return rows
     bridge_values = _normalise_scores([_safe_float(row, "score") for row in rows])
     weight = min(max(float(blend_with_stats_weight), 0.0), 1.0)
+    mode = blend_mode.strip().lower()
     blended_rows: list[dict[str, str]] = []
     for row, packet, bridge_value in zip(rows, packets, bridge_values, strict=True):
         stats_score = _sigmoid(6.0 * _safe_float(packet, "corr_margin"))
-        score = (1.0 - weight) * stats_score + weight * bridge_value
+        if mode in {"linear", "fused", "blend"}:
+            score = (1.0 - weight) * stats_score + weight * bridge_value
+            score_source = "bridge_fused"
+        elif mode in {"gated", "multiplicative"}:
+            score = stats_score * (1.0 + weight * bridge_value)
+            score_source = "bridge_gated"
+        else:
+            raise ValueError("blend_mode must be 'linear' or 'gated'.")
         blended = dict(row)
         blended["support_score"] = f"{score:.6f}"
         blended["rank_score"] = f"{score:.6f}"
         blended["score"] = f"{score:.6f}"
-        blended["score_source"] = "bridge_fused"
+        blended["score_source"] = score_source
         blended_rows.append(blended)
     return blended_rows
 
@@ -303,7 +314,7 @@ def main() -> None:
     parser.add_argument("--dataset-path", default="", help="Optional feature CSV path override for the base config dataset.")
     parser.add_argument("--split", default="train")
     parser.add_argument("--top-k", type=int, action="append", default=[], help="Top-k to summarize/run. Can be passed multiple times.")
-    parser.add_argument("--sources", action="append", default=[], help="Source label(s) to emit/run: stats, language, image, fused, bridge, bridge_fused. Can be comma-separated or repeated.")
+    parser.add_argument("--sources", action="append", default=[], help="Source label(s) to emit/run: stats, language, image, fused, bridge, bridge_fused, bridge_gated. Can be comma-separated or repeated.")
     parser.add_argument("--out-dir", default="outputs/dfr_sweeps/clue_fusion", help="Directory for cards, clues, scores, ablations, and optional downstream rows.")
     parser.add_argument("--card-top-k", type=int, default=16, help="Top and bottom activation count per feature card.")
     parser.add_argument("--bridge-input-dir", default="outputs/dfr_sweeps/llm_clue_fixture_experiments", help="Fixture trace directory used when source=bridge.")
@@ -350,7 +361,7 @@ def main() -> None:
     score_paths: dict[str, Path] = {}
     for source in sources:
         score_path = out_dir / f"scores_{source}.csv"
-        if source in {"bridge", "bridge_fused"}:
+        if source in {"bridge", "bridge_fused", "bridge_gated"}:
             rows = build_bridge_score_rows(
                 bundle,
                 bridge_input_dir=Path(args.bridge_input_dir),
@@ -358,7 +369,8 @@ def main() -> None:
                 exclude_datasets=_unique_strings(list(args.bridge_exclude_dataset)),
                 split_name=args.split,
                 card_top_k=args.card_top_k,
-                blend_with_stats_weight=float(args.bridge_fused_weight) if source == "bridge_fused" else None,
+                blend_with_stats_weight=float(args.bridge_fused_weight) if source in {"bridge_fused", "bridge_gated"} else None,
+                blend_mode="gated" if source == "bridge_gated" else "linear",
             )
         else:
             rows = build_source_score_rows(clue_rows, source)

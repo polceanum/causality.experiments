@@ -62,6 +62,7 @@ def test_resolve_sources_keeps_bridge_opt_in() -> None:
     assert resolve_sources([]) == ["stats", "language", "image", "fused"]
     assert resolve_sources(["bridge"]) == ["bridge"]
     assert resolve_sources(["bridge_fused"]) == ["bridge_fused"]
+    assert resolve_sources(["bridge_gated"]) == ["bridge_gated"]
 
 
 def test_build_downstream_candidate_uses_source_score_path() -> None:
@@ -102,6 +103,23 @@ def test_build_downstream_candidate_accepts_bridge_score_path() -> None:
     )
     assert candidate["dataset"]["causal_mask_strategy"] == "discovery_scores"
     assert candidate["dataset"]["discovery_scores_path"] == "scores_bridge.csv"
+
+
+def test_build_downstream_candidate_accepts_bridge_gated_score_path() -> None:
+    candidate = build_downstream_candidate(
+        {
+            "name": "waterbirds_base",
+            "dataset": {
+                "kind": "waterbirds_features",
+                "path": "features.csv",
+            },
+        },
+        label="bridge_gated",
+        top_k=32,
+        score_path=Path("scores_bridge_gated.csv"),
+    )
+    assert candidate["dataset"]["causal_mask_strategy"] == "discovery_scores"
+    assert candidate["dataset"]["discovery_scores_path"] == "scores_bridge_gated.csv"
 
 
 def test_build_downstream_candidate_can_prune_soft_scores() -> None:
@@ -247,3 +265,49 @@ def test_build_bridge_score_rows_can_blend_with_stats(tmp_path: Path) -> None:
 
     assert {row["score_source"] for row in rows} == {"bridge_fused"}
     assert all(0.0 <= float(row["score"]) <= 1.0 for row in rows)
+
+
+def test_build_bridge_score_rows_can_gate_stats_with_bridge(tmp_path: Path) -> None:
+    features = tmp_path / "features.csv"
+    features.write_text(
+        "\n".join(
+            [
+                "split,y,place,feature_good,feature_bad",
+                "train,0,0,0.0,1.0",
+                "train,0,1,0.0,0.8",
+                "train,1,0,1.0,0.2",
+                "train,1,1,1.0,0.0",
+                "val,0,0,0.0,1.0",
+                "val,1,1,1.0,0.0",
+                "test,0,1,0.0,0.8",
+                "test,1,0,1.0,0.2",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    bundle = __import__("causality_experiments.data", fromlist=["load_dataset"]).load_dataset(
+        {"dataset": {"kind": "waterbirds_features", "path": str(features)}}
+    )
+    traces = tmp_path / "bridge_runs" / "fixture"
+    traces.mkdir(parents=True)
+    (traces / "manifest.json").write_text('{"config": "configs/experiments/synthetic.yaml"}', encoding="utf-8")
+    (traces / "training_traces.jsonl").write_text(
+        "\n".join(
+            [
+                '{"feature_name":"feature_good","label_corr":0.9,"env_corr":0.1,"corr_margin":0.8,"abs_corr_margin":0.8,"uncertainty":0.1,"top_group_entropy":0.2,"label_env_disentanglement":0.8,"test_value":1.0,"score_delta":0.5,"hypothesis_correct":true,"passed_control":true}',
+                '{"feature_name":"feature_bad","label_corr":0.1,"env_corr":0.8,"corr_margin":-0.7,"abs_corr_margin":0.7,"uncertainty":0.9,"top_group_entropy":0.8,"label_env_disentanglement":0.1,"test_value":0.0,"score_delta":0.0,"hypothesis_correct":false,"passed_control":false}',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    rows = build_bridge_score_rows(
+        bundle,
+        bridge_input_dir=tmp_path / "bridge_runs",
+        exclude_datasets=[],
+        blend_with_stats_weight=0.2,
+        blend_mode="gated",
+    )
+
+    assert {row["score_source"] for row in rows} == {"bridge_gated"}
+    assert all(float(row["score"]) >= 0.0 for row in rows)

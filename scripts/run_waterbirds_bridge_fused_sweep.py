@@ -126,6 +126,7 @@ def run_bridge_fused_sweep(
     seeds: list[int],
     top_k_values: list[int],
     bridge_fused_weights: list[float],
+    bridge_score_source: str,
     bridge_alpha: float,
     bridge_exclude_datasets: list[str],
     card_top_k: int,
@@ -147,8 +148,11 @@ def run_bridge_fused_sweep(
     stats_path = out_dir / "scores_stats.csv"
     write_csv_rows(stats_path, build_source_score_rows(clue_rows, "stats"))
     bridge_paths: dict[float, Path] = {}
+    source = bridge_score_source.strip().lower()
+    if source not in {"bridge_fused", "bridge_gated"}:
+        raise ValueError("bridge_score_source must be 'bridge_fused' or 'bridge_gated'.")
     for weight in bridge_fused_weights:
-        score_path = out_dir / f"scores_bridge_fused_{_weight_label(weight)}.csv"
+        score_path = out_dir / f"scores_{source}_{_weight_label(weight)}.csv"
         write_csv_rows(
             score_path,
             build_bridge_score_rows(
@@ -159,6 +163,7 @@ def run_bridge_fused_sweep(
                 split_name="train",
                 card_top_k=card_top_k,
                 blend_with_stats_weight=weight,
+                blend_mode="gated" if source == "bridge_gated" else "linear",
             ),
         )
         bridge_paths[weight] = score_path
@@ -243,10 +248,10 @@ def run_bridge_fused_sweep(
             )
 
         for seed, top_k, weight in itertools.product(seeds, top_k_values, bridge_fused_weights):
-            label = f"bridge_fused_{_weight_label(weight)}"
+            label = f"{source}_{_weight_label(weight)}"
             config = build_downstream_candidate(
                 {**copy.deepcopy(candidate_base), "seed": seed},
-                label="bridge_fused",
+                label=source,
                 top_k=top_k,
                 score_path=bridge_paths[weight],
                 prune_soft_scores=True,
@@ -278,6 +283,7 @@ def run_bridge_fused_sweep(
             "seeds": seeds,
             "top_k_values": top_k_values,
             "bridge_fused_weights": bridge_fused_weights,
+            "bridge_score_source": source,
             "num_retrains": num_retrains,
             "bridge_alpha": bridge_alpha,
             "bridge_exclude_datasets": bridge_exclude_datasets,
@@ -299,6 +305,7 @@ def main() -> None:
     parser.add_argument("--seeds", nargs="*")
     parser.add_argument("--top-k", nargs="*")
     parser.add_argument("--bridge-fused-weights", nargs="*")
+    parser.add_argument("--bridge-score-source", choices=["bridge_fused", "bridge_gated"], default="bridge_fused")
     parser.add_argument("--bridge-alpha", type=float, default=10.0)
     parser.add_argument("--bridge-exclude-dataset", action="append", default=["waterbirds"])
     parser.add_argument("--card-top-k", type=int, default=16)
@@ -318,6 +325,7 @@ def main() -> None:
         seeds=_int_values(args.seeds, [101]),
         top_k_values=_int_values(args.top_k, [384, 512, 640]),
         bridge_fused_weights=_float_values(args.bridge_fused_weights, [0.1, 0.2, 0.3]),
+        bridge_score_source=str(args.bridge_score_source),
         bridge_alpha=float(args.bridge_alpha),
         bridge_exclude_datasets=list(dict.fromkeys(args.bridge_exclude_dataset)),
         card_top_k=int(args.card_top_k),

@@ -217,9 +217,12 @@ Decision:
   produced mean WGA `0.9338006079`, mean delta `+0.0007788241` to official DFR,
   and no negative seed deltas.
 - Treat this as a paired downstream bridge improvement, not yet a benchmark
-  claim. It is still below the current promotion gate. Next improvement should
-  target stronger bridge supervision or a downstream consumer beyond final-head
-  shrink, rather than tiny blend-weight changes around `0.2`.
+  claim. It is still below the current promotion gate. Follow-up refinements
+  confirmed the local optimum is sharp: `bridge_fused/w0.2/top512` reproduces
+  `0.9345794320` on seed 101, while `w0.18`, `w0.22`, top-448, top-576, and the
+  stricter `bridge_gated` variant all fall back to tying or trailing the locked
+  comparator. Next improvement should target stronger bridge supervision or a
+  downstream consumer beyond final-head shrink.
 
 ### Clue Fusion and Discovery Masks
 

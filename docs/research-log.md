@@ -1024,3 +1024,26 @@ signals. Keep this focused on what was tried and what was learned.
   below the current promotion gate; next improvement should target either a
   stronger bridge target or a better consumer than final-head shrink, not just
   small weight changes around `0.2`.
+
+## 2026-05-02: Bridge Score Refinement Stop-Rule
+
+- Added an opt-in `bridge_gated` score source. Unlike `bridge_fused`, which
+  linearly blends stats and normalized bridge scores, `bridge_gated` uses bridge
+  as a multiplicative boost on stats-supported features. This tests whether the
+  bridge should preserve the anti-environment statistical margin more strictly.
+- Compact seed-101 screen for `bridge_gated` showed no improvement over the
+  existing bridge-fused winner. Its best compact rows were top-640 with weights
+  `0.1` or `0.2`, both at WGA `0.9330376983`. A 50-retrain check for
+  `bridge_gated/w0.1/top640` tied the locked official DFR comparator at
+  `0.9330217838` and therefore was not promoted.
+- A 50-retrain top-k refinement for the existing `bridge_fused/w0.2` source
+  confirmed top-512 remains the only useful support size: top-448 and top-576
+  tied the comparator at `0.9330217838`, while top-512 reproduced
+  `0.9345794320`.
+- A 50-retrain weight refinement around top-512 confirmed the same sharp
+  optimum: weights `0.18` and `0.22` tied the comparator, while weight `0.2`
+  reproduced `0.9345794320`.
+- Interpretation: the current final-head shrink consumer has a narrow bridge
+  sweet spot, but local score-source/top-k/weight tweaks do not widen the gap.
+  The next serious attempt should improve the bridge target itself or feed the
+  bridge into a different downstream consumer.

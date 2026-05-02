@@ -106,6 +106,7 @@ def test_bridge_fused_sweep_reports_paired_deltas(tmp_path: Path, monkeypatch) -
         seeds=[101],
         top_k_values=[1],
         bridge_fused_weights=[0.2],
+        bridge_score_source="bridge_fused",
         bridge_alpha=10.0,
         bridge_exclude_datasets=[],
         card_top_k=2,
