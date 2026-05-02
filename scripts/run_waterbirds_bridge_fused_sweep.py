@@ -25,6 +25,7 @@ from causality_experiments.run import run_experiment
 from scripts.run_waterbirds_clue_fusion_sweep import (
     build_bridge_score_rows,
     build_downstream_candidate,
+    build_policy_score_rows,
     build_source_score_rows,
     with_dataset_path,
     with_runtime_overrides,
@@ -256,6 +257,9 @@ def run_bridge_fused_sweep(
     bridge_score_source: str,
     bridge_alpha: float,
     bridge_exclude_datasets: list[str],
+    policy_input_dir: Path,
+    policy_alpha: float,
+    policy_exclude_datasets: list[str],
     card_top_k: int,
     random_control_count: int,
     num_retrains: int,
@@ -283,20 +287,32 @@ def run_bridge_fused_sweep(
         random_paths[control_index] = score_path
     bridge_paths: dict[float | tuple[float, str], Path] = {}
     source = bridge_score_source.strip().lower()
-    if source not in {"bridge_fused", "bridge_gated"}:
-        raise ValueError("bridge_score_source must be 'bridge_fused' or 'bridge_gated'.")
+    if source not in {"bridge_fused", "bridge_gated", "policy_fused", "policy_safe"}:
+        raise ValueError("bridge_score_source must be 'bridge_fused', 'bridge_gated', 'policy_fused', or 'policy_safe'.")
     for weight in bridge_fused_weights:
         score_path = out_dir / f"scores_{source}_{_weight_label(weight)}.csv"
-        bridge_rows = build_bridge_score_rows(
-            bundle,
-            bridge_input_dir=bridge_input_dir,
-            alpha=bridge_alpha,
-            exclude_datasets=bridge_exclude_datasets,
-            split_name="train",
-            card_top_k=card_top_k,
-            blend_with_stats_weight=weight,
-            blend_mode="gated" if source == "bridge_gated" else "linear",
-        )
+        if source in {"bridge_fused", "bridge_gated"}:
+            bridge_rows = build_bridge_score_rows(
+                bundle,
+                bridge_input_dir=bridge_input_dir,
+                alpha=bridge_alpha,
+                exclude_datasets=bridge_exclude_datasets,
+                split_name="train",
+                card_top_k=card_top_k,
+                blend_with_stats_weight=weight,
+                blend_mode="gated" if source == "bridge_gated" else "linear",
+            )
+        else:
+            bridge_rows = build_policy_score_rows(
+                bundle,
+                policy_input_dir=policy_input_dir,
+                alpha=policy_alpha,
+                exclude_datasets=policy_exclude_datasets,
+                split_name="train",
+                card_top_k=card_top_k,
+                blend_with_stats_weight=weight,
+                blend_mode="safe_residual" if source == "policy_safe" else "minmax",
+            )
         write_csv_rows(score_path, bridge_rows)
         bridge_paths[weight] = score_path
         if source == "bridge_fused":
@@ -491,6 +507,9 @@ def run_bridge_fused_sweep(
             "num_retrains": num_retrains,
             "bridge_alpha": bridge_alpha,
             "bridge_exclude_datasets": bridge_exclude_datasets,
+            "policy_input_dir": str(policy_input_dir),
+            "policy_alpha": policy_alpha,
+            "policy_exclude_datasets": policy_exclude_datasets,
         }
     )
     output_json.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
@@ -510,9 +529,12 @@ def main() -> None:
     parser.add_argument("--top-k", nargs="*")
     parser.add_argument("--bridge-fused-weights", nargs="*")
     parser.add_argument("--support-variant", action="append", default=[])
-    parser.add_argument("--bridge-score-source", choices=["bridge_fused", "bridge_gated"], default="bridge_fused")
+    parser.add_argument("--bridge-score-source", choices=["bridge_fused", "bridge_gated", "policy_fused", "policy_safe"], default="bridge_fused")
     parser.add_argument("--bridge-alpha", type=float, default=10.0)
     parser.add_argument("--bridge-exclude-dataset", action="append", default=["waterbirds"])
+    parser.add_argument("--policy-input-dir", default="outputs/dfr_sweeps/llm_clue_fixture_experiments_20260502_refreshed")
+    parser.add_argument("--policy-alpha", type=float, default=10.0)
+    parser.add_argument("--policy-exclude-dataset", action="append", default=["waterbirds"])
     parser.add_argument("--card-top-k", type=int, default=16)
     parser.add_argument("--random-control-count", type=int, default=0)
     parser.add_argument("--num-retrains", type=int, default=5)
@@ -535,6 +557,9 @@ def main() -> None:
         bridge_score_source=str(args.bridge_score_source),
         bridge_alpha=float(args.bridge_alpha),
         bridge_exclude_datasets=list(dict.fromkeys(args.bridge_exclude_dataset)),
+        policy_input_dir=Path(args.policy_input_dir),
+        policy_alpha=float(args.policy_alpha),
+        policy_exclude_datasets=list(dict.fromkeys(args.policy_exclude_dataset)),
         card_top_k=int(args.card_top_k),
         random_control_count=int(args.random_control_count),
         num_retrains=int(args.num_retrains),

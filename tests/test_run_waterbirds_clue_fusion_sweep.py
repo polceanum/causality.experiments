@@ -3,6 +3,7 @@ from pathlib import Path
 from scripts.run_waterbirds_clue_fusion_sweep import (
     build_downstream_candidate,
     build_bridge_score_rows,
+    build_policy_score_rows,
     build_source_score_rows,
     resolve_sources,
     source_score,
@@ -63,6 +64,7 @@ def test_resolve_sources_keeps_bridge_opt_in() -> None:
     assert resolve_sources(["bridge"]) == ["bridge"]
     assert resolve_sources(["bridge_fused"]) == ["bridge_fused"]
     assert resolve_sources(["bridge_gated"]) == ["bridge_gated"]
+    assert resolve_sources(["policy_safe"]) == ["policy_safe"]
 
 
 def test_build_downstream_candidate_uses_source_score_path() -> None:
@@ -120,6 +122,23 @@ def test_build_downstream_candidate_accepts_bridge_gated_score_path() -> None:
     )
     assert candidate["dataset"]["causal_mask_strategy"] == "discovery_scores"
     assert candidate["dataset"]["discovery_scores_path"] == "scores_bridge_gated.csv"
+
+
+def test_build_downstream_candidate_accepts_policy_safe_score_path() -> None:
+    candidate = build_downstream_candidate(
+        {
+            "name": "waterbirds_base",
+            "dataset": {
+                "kind": "waterbirds_features",
+                "path": "features.csv",
+            },
+        },
+        label="policy_safe",
+        top_k=32,
+        score_path=Path("scores_policy_safe.csv"),
+    )
+    assert candidate["dataset"]["causal_mask_strategy"] == "discovery_scores"
+    assert candidate["dataset"]["discovery_scores_path"] == "scores_policy_safe.csv"
 
 
 def test_build_downstream_candidate_can_prune_soft_scores() -> None:
@@ -311,3 +330,63 @@ def test_build_bridge_score_rows_can_gate_stats_with_bridge(tmp_path: Path) -> N
 
     assert {row["score_source"] for row in rows} == {"bridge_gated"}
     assert all(float(row["score"]) >= 0.0 for row in rows)
+
+
+def test_build_policy_score_rows_can_emit_safe_residual_scores(tmp_path: Path) -> None:
+    features = tmp_path / "features.csv"
+    features.write_text(
+        "\n".join(
+            [
+                "split,y,place,feature_good,feature_bad",
+                "train,0,0,0.0,1.0",
+                "train,0,1,0.0,0.8",
+                "train,1,0,1.0,0.2",
+                "train,1,1,1.0,0.0",
+                "val,0,0,0.0,1.0",
+                "val,1,1,1.0,0.0",
+                "test,0,1,0.0,0.8",
+                "test,1,0,1.0,0.2",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    bundle = __import__("causality_experiments.data", fromlist=["load_dataset"]).load_dataset(
+        {"dataset": {"kind": "waterbirds_features", "path": str(features)}}
+    )
+    traces = tmp_path / "policy_runs" / "fixture"
+    traces.mkdir(parents=True)
+    (traces / "manifest.json").write_text('{"config": "configs/experiments/synthetic.yaml"}', encoding="utf-8")
+    (traces / "latent_clue_packets.jsonl").write_text(
+        "\n".join(
+            [
+                '{"candidate_id":"good","feature_name":"feature_good","label_corr":0.9,"env_corr":0.1,"corr_margin":0.8,"abs_corr_margin":0.8,"uncertainty":0.1,"top_group_entropy":0.2,"label_env_disentanglement":0.8,"causal_target":1.0}',
+                '{"candidate_id":"bad","feature_name":"feature_bad","label_corr":0.1,"env_corr":0.8,"corr_margin":-0.7,"abs_corr_margin":0.7,"uncertainty":0.9,"top_group_entropy":0.8,"label_env_disentanglement":0.1,"causal_target":0.0}',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (traces / "training_traces.jsonl").write_text(
+        "\n".join(
+            [
+                '{"candidate_id":"good","feature_name":"feature_good","action":"feature_mean_ablation","label_corr":0.9,"env_corr":0.1,"corr_margin":0.8,"abs_corr_margin":0.8,"uncertainty":0.1,"top_group_entropy":0.2,"label_env_disentanglement":0.8,"test_value":1.0,"score_delta":0.5,"hypothesis_correct":true,"passed_control":true}',
+                '{"candidate_id":"bad","feature_name":"feature_bad","action":"donor_swap_same_label_diff_env","label_corr":0.1,"env_corr":0.8,"corr_margin":-0.7,"abs_corr_margin":0.7,"uncertainty":0.9,"top_group_entropy":0.8,"label_env_disentanglement":0.1,"test_value":0.0,"score_delta":0.0,"hypothesis_correct":false,"passed_control":false}',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (traces / "feature_clues.csv").write_text(
+        "feature_name,causal_target\nfeature_good,1.0\nfeature_bad,0.0\n",
+        encoding="utf-8",
+    )
+
+    rows = build_policy_score_rows(
+        bundle,
+        policy_input_dir=tmp_path / "policy_runs",
+        exclude_datasets=[],
+        blend_with_stats_weight=0.5,
+        blend_mode="safe_residual",
+    )
+
+    by_feature = {row["feature_name"]: row for row in rows}
+    assert {row["score_source"] for row in rows} == {"policy_safe"}
+    assert float(by_feature["feature_good"]["score"]) > float(by_feature["feature_bad"]["score"])

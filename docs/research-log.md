@@ -85,6 +85,34 @@ signals. Keep this focused on what was tried and what was learned.
   pairwise/listwise or artifact-risk-aware training over the same reward table,
   with policy/stat fusion used as a conservative diagnostic candidate.
 
+## 2026-05-02: Policy-Fused Downstream Screen
+
+- Added explicit policy/stat fusion modes to `scripts/train_llm_clue_policy.py`.
+  The key distinction is now visible in the evaluator: raw contextual-bandit
+  value prediction remains weak at top-1, while conservative fusion can improve
+  wider supports without sacrificing stats top-1.
+- Added policy-derived Waterbirds score sources to
+  `scripts/run_waterbirds_clue_fusion_sweep.py`: `policy`, `policy_fused`, and
+  `policy_safe`. Also extended `scripts/run_waterbirds_bridge_fused_sweep.py`
+  so `policy_fused` and `policy_safe` can be evaluated with the same paired
+  official DFR, stats, and deterministic random-score controls used by the
+  bridge-fused candidate.
+- Fixture held-out result, alpha `10`: `policy_stats_safe_residual_w0.5`
+  preserved stats top-1 causal recovery (`0.625`) and improved top-2/top-4 to
+  `0.4375`/`0.34375`, compared with stats at `0.3125`/`0.28125`.
+- Downstream compact result shifted the preference: `policy_safe` regressed,
+  while `policy_fused/w0.5/top512` reached seed-101 compact test WGA
+  `0.9348115325` versus stats `0.9334811568`. In the paired compact two-seed,
+  five-retrain gate, `policy_fused/w0.5/top512` averaged `0.9346954823`, with
+  mean deltas `+0.0019955635` to official DFR and `+0.0006651878` to stats, but
+  only `1/2` non-negative deltas against the best deterministic random-score
+  control.
+- Interpretation: RL is not currently the best framing for the mechanism if it
+  means standalone policy optimization. The useful substrate is logged reward
+  provenance plus supervised rank/fusion learning. Policy-fused scores are a
+  promising auxiliary signal, but the active `bridge_fused/w0.3/top512`
+  candidate remains stronger and better controlled.
+
 ## 2026-04-22
 
 - Read the source document, which is a survey and experiment blueprint rather

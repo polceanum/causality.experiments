@@ -70,7 +70,7 @@ def test_bridge_fused_sweep_reports_paired_deltas(tmp_path: Path, monkeypatch) -
     def fake_run_experiment(config_path: Path, output_root: Path) -> Path:
         config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         name = str(config["name"])
-        if "bridge_fused" in name:
+        if "bridge_fused" in name or "policy_fused" in name:
             test_wga = 0.94
         elif "stats" in name:
             test_wga = 0.92
@@ -110,6 +110,9 @@ def test_bridge_fused_sweep_reports_paired_deltas(tmp_path: Path, monkeypatch) -
         bridge_score_source="bridge_fused",
         bridge_alpha=10.0,
         bridge_exclude_datasets=[],
+        policy_input_dir=traces,
+        policy_alpha=10.0,
+        policy_exclude_datasets=[],
         card_top_k=2,
         random_control_count=1,
         num_retrains=1,
@@ -131,3 +134,80 @@ def test_bridge_fused_sweep_reports_paired_deltas(tmp_path: Path, monkeypatch) -
     assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_score_square.csv").exists()
     random_summary = summary["random_controls"][0]
     assert random_summary["label"] == "random_score_0_top1"
+
+
+def test_bridge_fused_sweep_can_use_policy_fused_source(tmp_path: Path, monkeypatch) -> None:
+    features = tmp_path / "features.csv"
+    baseline = tmp_path / "baseline.yaml"
+    candidate = tmp_path / "candidate.yaml"
+    traces = tmp_path / "traces"
+    _write_features(features)
+    _write_config(baseline, name="official_dfr", method="official_dfr_val_tr")
+    _write_config(candidate, name="official_shrink", method="official_causal_shrink_dfr_val_tr")
+    _write_bridge_trace(traces)
+    run_dir = traces / "fixture"
+    (run_dir / "latent_clue_packets.jsonl").write_text(
+        "\n".join(
+            [
+                '{"candidate_id":"good","feature_name":"feature_good","label_corr":0.9,"env_corr":0.1,"corr_margin":0.8,"abs_corr_margin":0.8,"uncertainty":0.1,"top_group_entropy":0.2,"label_env_disentanglement":0.8,"causal_target":1.0}',
+                '{"candidate_id":"bad","feature_name":"feature_bad","label_corr":0.1,"env_corr":0.8,"corr_margin":-0.7,"abs_corr_margin":0.7,"uncertainty":0.9,"top_group_entropy":0.8,"label_env_disentanglement":0.1,"causal_target":0.0}',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "feature_clues.csv").write_text(
+        "feature_name,causal_target\nfeature_good,1.0\nfeature_bad,0.0\n",
+        encoding="utf-8",
+    )
+
+    def fake_run_experiment(config_path: Path, output_root: Path) -> Path:
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        name = str(config["name"])
+        test_wga = 0.94 if "policy_fused" in name else 0.93
+        output = output_root / name
+        output.mkdir(parents=True, exist_ok=True)
+        (output / "metrics.json").write_text(
+            json.dumps(
+                {
+                    "metrics": {
+                        "val/worst_group_accuracy": test_wga,
+                        "test/worst_group_accuracy": test_wga,
+                        "val/accuracy": test_wga,
+                        "test/accuracy": test_wga,
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        return output
+
+    monkeypatch.setattr(sweep, "run_experiment", fake_run_experiment)
+
+    summary = sweep.run_bridge_fused_sweep(
+        baseline_config_path=baseline,
+        candidate_config_path=candidate,
+        dataset_path=str(features),
+        bridge_input_dir=traces,
+        out_dir=tmp_path / "scores",
+        output_csv=tmp_path / "rows.csv",
+        output_json=tmp_path / "summary.json",
+        seeds=[101],
+        top_k_values=[1],
+        bridge_fused_weights=[0.5],
+        support_variants=[],
+        bridge_score_source="policy_fused",
+        bridge_alpha=10.0,
+        bridge_exclude_datasets=[],
+        policy_input_dir=traces,
+        policy_alpha=10.0,
+        policy_exclude_datasets=[],
+        card_top_k=2,
+        random_control_count=0,
+        num_retrains=1,
+        training_device="cpu",
+        output_root=tmp_path / "runs",
+    )
+
+    labels = {candidate["label"] for candidate in summary["candidates"]}
+    assert "policy_fused_w0p5_top1" in labels
+    assert (tmp_path / "scores" / "scores_policy_fused_w0p5.csv").exists()

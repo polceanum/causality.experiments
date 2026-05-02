@@ -268,11 +268,20 @@ Decision:
   benchmark-final/test reward rows from training, and evaluates a ridge value
   policy leave-one-fixture-out. On the refreshed trace snapshot with alpha
   `10`, raw policy top-1 causal recovery is weak (`0.25` versus stats `0.625`),
-  but conservative normalized policy/stat fusion at `w=0.3` preserves stats
-  top-1 (`0.625`) and improves top-2/top-4 recovery (`0.375`/`0.34375` versus
-  stats `0.3125`/`0.28125`). Treat the fused policy as a development signal,
-  not a Waterbirds promotion candidate until it clears a downstream compact
-  screen.
+  but normalized policy/stat fusion preserves stats top-1 (`0.625`) and can
+  improve top-2/top-4 recovery. The strongest fixture diagnostic from this
+  pass is `policy_stats_safe_residual_w0.5`: top-1 `0.625`, top-2 `0.4375`,
+  top-4 `0.34375` versus stats `0.625`/`0.3125`/`0.28125`.
+- Policy-derived Waterbirds score sources are now available as `policy`,
+  `policy_fused`, and `policy_safe` in the clue-fusion path, and the paired
+  bridge-fused sweep runner can evaluate `policy_fused`/`policy_safe` with the
+  same official, stats, and random controls. The first compact downstream
+  result says the downstream-friendly variant is `policy_fused/w0.5/top512`,
+  not `policy_safe`: two compact seeds with five retrains give mean test WGA
+  `0.9346954823`, mean delta `+0.0019955635` to official DFR and
+  `+0.0006651878` to stats, but only `1/2` non-negative deltas against the best
+  random control. This is useful auxiliary signal, but weaker than the active
+  `bridge_fused/w0.3/top512` candidate and not a promotion candidate.
 
 ### Clue Fusion and Discovery Masks
 
@@ -352,8 +361,10 @@ Decision:
      two-stage artifact-risk bridge, but require held-out fixture improvement or
      a compact Waterbirds screen before 50-retrain promotion.
    - Keep raw offline policy below promotion until it beats stats on held-out
-     fixture top-1; the current useful signal is only the conservative
-     policy/stat fusion.
+     fixture top-1. Current evidence favors using policy learning as a
+     supervised auxiliary scorer or fusion term, not as standalone RL.
+   - Do not full-budget promote `policy_fused/w0.5/top512` unless it first
+     clears best-random controls in a stronger compact paired screen.
    - Do not re-add raw activation-gap fields directly without a versioned corpus
      and held-out win.
 

@@ -396,5 +396,7 @@ def test_offline_clue_policy_evaluates_heldout_packet_candidates(tmp_path: Path)
     assert (tmp_path / "rewards.csv").exists()
     policy = next(row for row in summary["by_label_top_k"] if row["label"] == "offline_clue_policy")
     fused = next(row for row in summary["by_label_top_k"] if row["label"] == "policy_stats_fused_w0.3")
+    safe = next(row for row in summary["by_label_top_k"] if row["label"] == "policy_stats_safe_residual_w0.5")
     assert policy["mean_causal_target"] == 1.0
     assert fused["mean_causal_target"] == 1.0
+    assert safe["mean_causal_target"] == 1.0

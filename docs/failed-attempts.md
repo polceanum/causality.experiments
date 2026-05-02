@@ -204,6 +204,19 @@ issues unless they invalidate an experimental result.
     policy/stat fusion and upgrade training to pairwise/listwise or
     artifact-risk-aware objectives before downstream Waterbirds promotion.
 
+- **Policy-fused scores as the next immediate Waterbirds promotion**
+  - Attempt: expose offline policy scores as Waterbirds discovery-score sources
+    and evaluate `policy_fused/w0.5/top512` through the official causal-shrink
+    consumer with paired compact official/stat/random controls.
+  - Result: the candidate beat official DFR and stats on mean over two compact
+    seeds, but the margin was small and it was non-negative against the best
+    deterministic random-score control on only `1/2` seeds. It also trailed the
+    already active bridge-fused compact result.
+  - Interpretation: policy learning is useful as an auxiliary scorer, but it is
+    not yet a stronger primary mechanism than the existing bridge/stat fusion.
+  - Action: do not run a full 50-retrain promotion for this variant. Use it as
+    an ingredient for future bridge-policy hybrids or better rank objectives.
+
 - **Activation-gap fields as bridge-ranker features**
   - Attempt: add activation label/environment gaps and alignment one-hot fields
     to bridge training rows and the ridge ranker, then refresh the offline

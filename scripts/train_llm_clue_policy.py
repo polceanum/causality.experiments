@@ -90,6 +90,31 @@ def _minmax_normalize(scores: dict[str, float]) -> dict[str, float]:
     return {key: (value - low) / (high - low) for key, value in scores.items()}
 
 
+def _fuse_scores(
+    *,
+    policy_scores: dict[str, float],
+    stats_scores: dict[str, float],
+    weight: float,
+    mode: str,
+) -> dict[str, float]:
+    normalized_policy = _minmax_normalize(policy_scores)
+    normalized_stats = _minmax_normalize(stats_scores)
+    clipped_weight = min(max(float(weight), 0.0), 1.0)
+    mode_key = mode.strip().lower()
+    if mode_key in {"minmax", "linear"}:
+        return {
+            name: clipped_weight * normalized_policy.get(name, 0.0)
+            + (1.0 - clipped_weight) * normalized_stats.get(name, 0.0)
+            for name in stats_scores
+        }
+    if mode_key == "safe_residual":
+        return {
+            name: normalized_stats.get(name, 0.0) + clipped_weight * normalized_policy.get(name, 0.0)
+            for name in stats_scores
+        }
+    raise ValueError("fusion mode must be 'minmax' or 'safe_residual'.")
+
+
 def _evaluate_scores(
     *,
     dataset: str,
@@ -134,12 +159,14 @@ def run_clue_policy_training(
     alpha: float = 10.0,
     top_k_values: list[int] | None = None,
     fusion_weights: list[float] | None = None,
+    fusion_modes: list[str] | None = None,
 ) -> dict[str, Any]:
     run_dirs = sorted(path for path in input_dir.iterdir() if path.is_dir())
     if not run_dirs:
         raise ValueError(f"No run directories found under {input_dir}.")
     top_k_values = top_k_values or [1, 2, 4]
     fusion_weights = fusion_weights or [0.1, 0.3, 0.5]
+    fusion_modes = fusion_modes or ["minmax", "safe_residual"]
     all_reward_rows: list[dict[str, Any]] = []
     for run_dir in run_dirs:
         all_reward_rows.extend(_reward_rows_for_run(run_dir))
@@ -164,20 +191,21 @@ def run_clue_policy_training(
             name = str(packet.get("feature_name", ""))
             stats_scores[name] = _safe_float(packet.get("label_corr")) - _safe_float(packet.get("env_corr"))
             random_scores[name] = _random_score(int(_safe_float(packet.get("feature_index"))))
-        normalized_policy = _minmax_normalize(policy_scores)
-        normalized_stats = _minmax_normalize(stats_scores)
         score_sets = {
             "offline_clue_policy": policy_scores,
             "stats_margin": stats_scores,
             "random": random_scores,
         }
-        for weight in fusion_weights:
-            label = f"policy_stats_fused_w{weight:g}"
-            score_sets[label] = {
-                name: float(weight) * normalized_policy.get(name, 0.0)
-                + (1.0 - float(weight)) * normalized_stats.get(name, 0.0)
-                for name in stats_scores
-            }
+        for mode in fusion_modes:
+            for weight in fusion_weights:
+                label_prefix = "policy_stats_fused" if mode == "minmax" else f"policy_stats_{mode}"
+                label = f"{label_prefix}_w{weight:g}"
+                score_sets[label] = _fuse_scores(
+                    policy_scores=policy_scores,
+                    stats_scores=stats_scores,
+                    weight=weight,
+                    mode=mode,
+                )
         dataset = _dataset_name(heldout)
         all_eval_rows.extend(
             _evaluate_scores(
@@ -206,6 +234,7 @@ def run_clue_policy_training(
         "alpha": float(alpha),
         "top_k_values": top_k_values,
         "fusion_weights": fusion_weights,
+        "fusion_modes": fusion_modes,
         "datasets": dataset_summaries,
         "by_label_top_k": [],
     }
@@ -233,6 +262,7 @@ def main() -> None:
     parser.add_argument("--alpha", type=float, default=10.0)
     parser.add_argument("--top-k", nargs="*", type=int, default=[1, 2, 4])
     parser.add_argument("--fusion-weights", nargs="*", type=float, default=[0.1, 0.3, 0.5])
+    parser.add_argument("--fusion-modes", nargs="*", default=["minmax", "safe_residual"])
     args = parser.parse_args()
     summary = run_clue_policy_training(
         input_dir=Path(args.input_dir),
@@ -242,6 +272,7 @@ def main() -> None:
         alpha=float(args.alpha),
         top_k_values=list(args.top_k),
         fusion_weights=list(args.fusion_weights),
+        fusion_modes=list(args.fusion_modes),
     )
     print(json.dumps(summary, sort_keys=True), flush=True)
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 from copy import deepcopy
 import json
 import math
@@ -25,13 +26,14 @@ from causality_experiments.config import load_config
 from causality_experiments.data import load_dataset
 from causality_experiments.discovery import build_feature_clue_rows, merge_external_clue_rows
 from causality_experiments.latent_clue_packets import build_latent_clue_packets
+from causality_experiments.rl_clue_policy import build_clue_reward_rows, score_policy_packets, train_offline_clue_policy
 from causality_experiments.run import run_experiment
 from scripts.report_clue_source_ablation import summarize_source_ablation
 from scripts.train_llm_clue_bridge_ranker import fit_bridge_ranker_from_runs, score_bridge_packets
 
 
 DEFAULT_SOURCE_LABELS = ("stats", "language", "image", "fused")
-SOURCE_LABELS = (*DEFAULT_SOURCE_LABELS, "bridge", "bridge_fused", "bridge_gated")
+SOURCE_LABELS = (*DEFAULT_SOURCE_LABELS, "bridge", "bridge_fused", "bridge_gated", "policy", "policy_fused", "policy_safe")
 
 
 def _safe_float(row: dict[str, Any], key: str) -> float:
@@ -68,6 +70,52 @@ def _normalise_scores(values: list[float]) -> list[float]:
     if hi <= lo + 1e-12:
         return [0.5 for _ in values]
     return [(value - lo) / (hi - lo) for value in values]
+
+
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def _read_csv(path: Path) -> list[dict[str, str]]:
+    if not path.exists():
+        return []
+    with path.open(encoding="utf-8", newline="") as handle:
+        return list(csv.DictReader(handle))
+
+
+def _dataset_name(run_dir: Path) -> str:
+    manifest_path = run_dir / "manifest.json"
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        config = str(manifest.get("config", ""))
+        if config:
+            return Path(config).stem
+        dataset = str(manifest.get("dataset", ""))
+        if dataset:
+            return dataset
+    return run_dir.name
+
+
+def _matches_any_dataset_name(dataset: str, patterns: list[str] | None) -> bool:
+    if not patterns:
+        return False
+    lowered = dataset.lower()
+    return any(pattern.strip().lower() in lowered for pattern in patterns if pattern.strip())
+
+
+def _reward_rows_for_run(run_dir: Path) -> list[dict[str, Any]]:
+    packets = _read_jsonl(run_dir / "latent_clue_packets.jsonl")
+    traces = _read_jsonl(run_dir / "training_traces.jsonl")
+    feature_clues = {str(row.get("feature_name", "")): row for row in _read_csv(run_dir / "feature_clues.csv")}
+    return build_clue_reward_rows(
+        packets=packets,
+        traces=traces,
+        feature_clues=feature_clues,
+        dataset=_dataset_name(run_dir),
+        reward_scope="fixture",
+    )
 
 
 def source_score(row: dict[str, Any], source: str) -> float:
@@ -162,6 +210,54 @@ def build_bridge_score_rows(
             score_source = "bridge_gated"
         else:
             raise ValueError("blend_mode must be 'linear' or 'gated'.")
+        blended = dict(row)
+        blended["support_score"] = f"{score:.6f}"
+        blended["rank_score"] = f"{score:.6f}"
+        blended["score"] = f"{score:.6f}"
+        blended["score_source"] = score_source
+        blended_rows.append(blended)
+    return blended_rows
+
+
+def build_policy_score_rows(
+    bundle: Any,
+    *,
+    policy_input_dir: Path,
+    alpha: float = 10.0,
+    exclude_datasets: list[str] | None = None,
+    split_name: str = "train",
+    card_top_k: int = 16,
+    blend_with_stats_weight: float | None = None,
+    blend_mode: str = "safe_residual",
+) -> list[dict[str, str]]:
+    train_rows: list[dict[str, Any]] = []
+    run_dirs = sorted(path for path in policy_input_dir.iterdir() if path.is_dir())
+    if not run_dirs:
+        raise ValueError(f"No run directories found under {policy_input_dir}.")
+    for run_dir in run_dirs:
+        dataset = _dataset_name(run_dir)
+        if _matches_any_dataset_name(dataset, exclude_datasets):
+            continue
+        train_rows.extend(_reward_rows_for_run(run_dir))
+    policy = train_offline_clue_policy(train_rows, alpha=alpha)
+    packets = build_latent_clue_packets(bundle, split_name=split_name, top_k=card_top_k)
+    rows = score_policy_packets(packets, policy)
+    if blend_with_stats_weight is None:
+        return [dict(row, score_source="policy") for row in rows]
+    policy_values = _normalise_scores([_safe_float(row, "score") for row in rows])
+    stats_values = _normalise_scores([_sigmoid(6.0 * _safe_float(packet, "corr_margin")) for packet in packets])
+    weight = min(max(float(blend_with_stats_weight), 0.0), 1.0)
+    mode = blend_mode.strip().lower()
+    blended_rows: list[dict[str, str]] = []
+    for row, policy_value, stats_value in zip(rows, policy_values, stats_values, strict=True):
+        if mode in {"linear", "minmax", "fused"}:
+            score = (1.0 - weight) * stats_value + weight * policy_value
+            score_source = "policy_fused"
+        elif mode in {"safe", "safe_residual", "residual"}:
+            score = stats_value + weight * policy_value
+            score_source = "policy_safe"
+        else:
+            raise ValueError("blend_mode must be 'minmax' or 'safe_residual'.")
         blended = dict(row)
         blended["support_score"] = f"{score:.6f}"
         blended["rank_score"] = f"{score:.6f}"
@@ -314,13 +410,17 @@ def main() -> None:
     parser.add_argument("--dataset-path", default="", help="Optional feature CSV path override for the base config dataset.")
     parser.add_argument("--split", default="train")
     parser.add_argument("--top-k", type=int, action="append", default=[], help="Top-k to summarize/run. Can be passed multiple times.")
-    parser.add_argument("--sources", action="append", default=[], help="Source label(s) to emit/run: stats, language, image, fused, bridge, bridge_fused, bridge_gated. Can be comma-separated or repeated.")
+    parser.add_argument("--sources", action="append", default=[], help="Source label(s) to emit/run: stats, language, image, fused, bridge, bridge_fused, bridge_gated, policy, policy_fused, policy_safe. Can be comma-separated or repeated.")
     parser.add_argument("--out-dir", default="outputs/dfr_sweeps/clue_fusion", help="Directory for cards, clues, scores, ablations, and optional downstream rows.")
     parser.add_argument("--card-top-k", type=int, default=16, help="Top and bottom activation count per feature card.")
     parser.add_argument("--bridge-input-dir", default="outputs/dfr_sweeps/llm_clue_fixture_experiments", help="Fixture trace directory used when source=bridge.")
     parser.add_argument("--bridge-alpha", type=float, default=10.0)
     parser.add_argument("--bridge-fused-weight", type=float, default=0.2, help="Weight on normalized bridge score for source=bridge_fused; the remainder is stats score.")
     parser.add_argument("--bridge-exclude-dataset", action="append", default=["waterbirds"], help="Dataset-name substring to exclude from bridge training. Can be repeated.")
+    parser.add_argument("--policy-input-dir", default="outputs/dfr_sweeps/llm_clue_fixture_experiments_20260502_refreshed", help="Fixture trace directory used when source=policy/policy_fused/policy_safe.")
+    parser.add_argument("--policy-alpha", type=float, default=10.0)
+    parser.add_argument("--policy-fused-weight", type=float, default=0.5, help="Weight on normalized policy score for source=policy_fused/policy_safe.")
+    parser.add_argument("--policy-exclude-dataset", action="append", default=["waterbirds"], help="Dataset-name substring to exclude from policy training. Can be repeated.")
     parser.add_argument("--run-downstream", action="store_true", help="Run downstream top-k DFR candidates after writing source score files.")
     parser.add_argument("--prune-soft-scores", action="store_true", help="For discovery-score candidates, zero soft scores outside the selected top-k support.")
     parser.add_argument("--include-heuristic", action="store_true")
@@ -372,6 +472,17 @@ def main() -> None:
                 blend_with_stats_weight=float(args.bridge_fused_weight) if source in {"bridge_fused", "bridge_gated"} else None,
                 blend_mode="gated" if source == "bridge_gated" else "linear",
             )
+        elif source in {"policy", "policy_fused", "policy_safe"}:
+            rows = build_policy_score_rows(
+                bundle,
+                policy_input_dir=Path(args.policy_input_dir),
+                alpha=float(args.policy_alpha),
+                exclude_datasets=_unique_strings(list(args.policy_exclude_dataset)),
+                split_name=args.split,
+                card_top_k=args.card_top_k,
+                blend_with_stats_weight=float(args.policy_fused_weight) if source in {"policy_fused", "policy_safe"} else None,
+                blend_mode="safe_residual" if source == "policy_safe" else "minmax",
+            )
         else:
             rows = build_source_score_rows(clue_rows, source)
         write_csv_rows(score_path, rows)
@@ -396,6 +507,10 @@ def main() -> None:
         "bridge_alpha": float(args.bridge_alpha),
         "bridge_fused_weight": float(args.bridge_fused_weight),
         "bridge_exclude_dataset": _unique_strings(list(args.bridge_exclude_dataset)),
+        "policy_input_dir": str(args.policy_input_dir),
+        "policy_alpha": float(args.policy_alpha),
+        "policy_fused_weight": float(args.policy_fused_weight),
+        "policy_exclude_dataset": _unique_strings(list(args.policy_exclude_dataset)),
         "official_dfr_num_retrains": args.official_dfr_num_retrains,
         "training_device": args.training_device,
         "cards": str(cards_path),
