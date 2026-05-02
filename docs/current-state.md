@@ -249,6 +249,17 @@ Decision:
   while deterministic random controls overlap only `124`-`145` features
   (`0.1378`-`0.1650` Jaccard). Bridge-fused selects only `5` features where
   `env_corr >= label_corr`, versus `91`-`93` for random controls.
+- `scripts/run_waterbirds_bridge_fused_sweep.py` now supports opt-in bridge
+  support variants for controlled screens: `env_filter`, `margin_gate`,
+  `stats_fill`, `soft_env_penalty`, `stats_anchor`, `score_sqrt`, and
+  `score_square`. These are diagnostics and candidate generators, not new
+  defaults.
+- The first support-composition iteration did not widen the full-budget margin.
+  Hard `env_filter` looked slightly better in a two-seed, five-retrain compact
+  screen, but the five-seed 50-retrain gate underperformed the incumbent:
+  mean WGA `0.9361370683` versus incumbent `0.9367601395`, with only `3/5`
+  non-negative deltas against the best random control. Softer penalties and
+  monotone score-shape transforms did not create a larger compact margin.
 
 ### Clue Fusion and Discovery Masks
 
@@ -317,8 +328,11 @@ Decision:
 2. Use support diagnostics to define the next candidate family.
    - The incumbent is not random-like: it shares much more support with stats
      while avoiding the random controls' env-dominant selected features.
-   - Next official-feature variants should test support composition and
-     score-to-scale transforms, not tiny local `w0.3` perturbations.
+   - Simple hard/soft env filtering and monotone score-shape transforms have
+     now been screened; do not promote them unless a materially different gate
+     changes the objective.
+   - The next official-feature improvement should change bridge supervision or
+     the official-compatible consumer more substantially than score reshaping.
 
 3. Improve bridge supervision only behind held-out gates.
    - Try pairwise/listwise ranking or a two-stage artifact-risk bridge, but

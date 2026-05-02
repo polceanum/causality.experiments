@@ -6,6 +6,7 @@ import csv
 import hashlib
 import itertools
 import json
+import math
 from pathlib import Path
 import statistics
 import sys
@@ -80,6 +81,64 @@ def build_random_score_rows(clue_rows: list[dict[str, Any]], *, control_index: i
                 "score_source": f"random_score_{control_index}",
             }
         )
+    return rows
+
+
+def _safe_float(row: dict[str, Any], key: str) -> float:
+    value = row.get(key)
+    if value in (None, ""):
+        return 0.0
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def build_support_variant_score_rows(
+    *,
+    clue_rows: list[dict[str, Any]],
+    stats_rows: list[dict[str, str]],
+    bridge_rows: list[dict[str, str]],
+    variant: str,
+) -> list[dict[str, str]]:
+    stats_by_feature = {row["feature_name"]: _safe_float(row, "score") for row in stats_rows}
+    clues_by_feature = {str(row.get("feature_name", "")): row for row in clue_rows}
+    variant_key = variant.strip().lower()
+    rows: list[dict[str, str]] = []
+    for row in bridge_rows:
+        feature_name = row["feature_name"]
+        clue = clues_by_feature.get(feature_name, {})
+        bridge_score = _safe_float(row, "score")
+        stats_score = stats_by_feature.get(feature_name, 0.0)
+        label_corr = _safe_float(clue, "label_corr")
+        env_corr = _safe_float(clue, "env_corr")
+        corr_margin = _safe_float(clue, "corr_margin")
+        shortcut_excess = max(0.0, env_corr - label_corr)
+        if variant_key == "env_filter":
+            score = bridge_score if label_corr > env_corr else 0.0
+        elif variant_key == "margin_gate":
+            score = bridge_score * max(0.0, min(1.0, 0.5 + 0.5 * corr_margin))
+        elif variant_key == "stats_fill":
+            score = bridge_score if label_corr > env_corr else 0.5 * stats_score
+        elif variant_key == "soft_env_penalty":
+            score = bridge_score * max(0.25, 1.0 - 0.5 * shortcut_excess)
+        elif variant_key == "stats_anchor":
+            score = 0.75 * bridge_score + 0.25 * stats_score if label_corr > env_corr else 0.5 * bridge_score + 0.5 * stats_score
+        elif variant_key == "score_sqrt":
+            score = math.sqrt(max(0.0, bridge_score))
+        elif variant_key == "score_square":
+            score = max(0.0, bridge_score) ** 2
+        else:
+            raise ValueError(
+                "support variant must be one of: env_filter, margin_gate, stats_fill, "
+                "soft_env_penalty, stats_anchor, score_sqrt, score_square."
+            )
+        updated = dict(row)
+        updated["support_score"] = f"{score:.6f}"
+        updated["rank_score"] = f"{score:.6f}"
+        updated["score"] = f"{score:.6f}"
+        updated["score_source"] = f"bridge_fused_{variant_key}"
+        rows.append(updated)
     return rows
 
 
@@ -193,6 +252,7 @@ def run_bridge_fused_sweep(
     seeds: list[int],
     top_k_values: list[int],
     bridge_fused_weights: list[float],
+    support_variants: list[str],
     bridge_score_source: str,
     bridge_alpha: float,
     bridge_exclude_datasets: list[str],
@@ -214,32 +274,58 @@ def run_bridge_fused_sweep(
     bundle = load_dataset(base_for_scores)
     clue_rows = build_feature_clue_rows(bundle, split_name="train")
     stats_path = out_dir / "scores_stats.csv"
-    write_csv_rows(stats_path, build_source_score_rows(clue_rows, "stats"))
+    stats_rows = build_source_score_rows(clue_rows, "stats")
+    write_csv_rows(stats_path, stats_rows)
     random_paths: dict[int, Path] = {}
     for control_index in range(max(0, int(random_control_count))):
         score_path = out_dir / f"scores_random_control_{control_index}.csv"
         write_csv_rows(score_path, build_random_score_rows(clue_rows, control_index=control_index))
         random_paths[control_index] = score_path
-    bridge_paths: dict[float, Path] = {}
+    bridge_paths: dict[float | tuple[float, str], Path] = {}
     source = bridge_score_source.strip().lower()
     if source not in {"bridge_fused", "bridge_gated"}:
         raise ValueError("bridge_score_source must be 'bridge_fused' or 'bridge_gated'.")
     for weight in bridge_fused_weights:
         score_path = out_dir / f"scores_{source}_{_weight_label(weight)}.csv"
-        write_csv_rows(
-            score_path,
-            build_bridge_score_rows(
-                bundle,
-                bridge_input_dir=bridge_input_dir,
-                alpha=bridge_alpha,
-                exclude_datasets=bridge_exclude_datasets,
-                split_name="train",
-                card_top_k=card_top_k,
-                blend_with_stats_weight=weight,
-                blend_mode="gated" if source == "bridge_gated" else "linear",
-            ),
+        bridge_rows = build_bridge_score_rows(
+            bundle,
+            bridge_input_dir=bridge_input_dir,
+            alpha=bridge_alpha,
+            exclude_datasets=bridge_exclude_datasets,
+            split_name="train",
+            card_top_k=card_top_k,
+            blend_with_stats_weight=weight,
+            blend_mode="gated" if source == "bridge_gated" else "linear",
         )
+        write_csv_rows(score_path, bridge_rows)
         bridge_paths[weight] = score_path
+        if source == "bridge_fused":
+            for variant in support_variants:
+                variant_key = variant.strip().lower()
+                if variant_key not in {
+                    "env_filter",
+                    "margin_gate",
+                    "stats_fill",
+                    "soft_env_penalty",
+                    "stats_anchor",
+                    "score_sqrt",
+                    "score_square",
+                }:
+                    raise ValueError(
+                        "support variants must be one of: env_filter, margin_gate, stats_fill, "
+                        "soft_env_penalty, stats_anchor, score_sqrt, score_square."
+                    )
+                variant_path = out_dir / f"scores_{source}_{_weight_label(weight)}_{variant_key}.csv"
+                write_csv_rows(
+                    variant_path,
+                    build_support_variant_score_rows(
+                        clue_rows=clue_rows,
+                        stats_rows=stats_rows,
+                        bridge_rows=bridge_rows,
+                        variant=variant_key,
+                    ),
+                )
+                bridge_paths[(weight, variant_key)] = variant_path
 
     baseline_base = with_runtime_overrides(
         with_dataset_path(load_config(baseline_config_path), dataset_path),
@@ -348,13 +434,28 @@ def run_bridge_fused_sweep(
                 )
             )
 
-        for seed, top_k, weight in itertools.product(seeds, top_k_values, bridge_fused_weights):
-            label = f"{source}_{_weight_label(weight)}"
+        candidate_items: list[tuple[float, str, Path, float | None]] = []
+        for weight in bridge_fused_weights:
+            candidate_items.append((weight, f"{source}_{_weight_label(weight)}", bridge_paths[weight], weight))
+            if source == "bridge_fused":
+                for variant in support_variants:
+                    variant_key = variant.strip().lower()
+                    candidate_items.append(
+                        (
+                            weight,
+                            f"{source}_{_weight_label(weight)}_{variant_key}",
+                            bridge_paths[(weight, variant_key)],
+                            weight,
+                        )
+                    )
+
+        for seed, top_k, candidate_item in itertools.product(seeds, top_k_values, candidate_items):
+            _weight, label, score_path, row_weight = candidate_item
             config = build_downstream_candidate(
                 {**copy.deepcopy(candidate_base), "seed": seed},
                 label=source,
                 top_k=top_k,
-                score_path=bridge_paths[weight],
+                score_path=score_path,
                 prune_soft_scores=True,
             )
             config["name"] = f"{candidate_base.get('name', 'bridge_fused')}_{label}_top{top_k}_seed{seed}"
@@ -368,7 +469,7 @@ def run_bridge_fused_sweep(
                     label=f"{label}_top{top_k}",
                     seed=seed,
                     top_k=top_k,
-                    weight=weight,
+                    weight=row_weight,
                     run_dir=run_dir,
                     metrics=metrics,
                     baseline_metrics=baseline_by_seed[seed],
@@ -384,6 +485,7 @@ def run_bridge_fused_sweep(
             "seeds": seeds,
             "top_k_values": top_k_values,
             "bridge_fused_weights": bridge_fused_weights,
+            "support_variants": support_variants,
             "bridge_score_source": source,
             "random_control_count": random_control_count,
             "num_retrains": num_retrains,
@@ -407,6 +509,7 @@ def main() -> None:
     parser.add_argument("--seeds", nargs="*")
     parser.add_argument("--top-k", nargs="*")
     parser.add_argument("--bridge-fused-weights", nargs="*")
+    parser.add_argument("--support-variant", action="append", default=[])
     parser.add_argument("--bridge-score-source", choices=["bridge_fused", "bridge_gated"], default="bridge_fused")
     parser.add_argument("--bridge-alpha", type=float, default=10.0)
     parser.add_argument("--bridge-exclude-dataset", action="append", default=["waterbirds"])
@@ -428,6 +531,7 @@ def main() -> None:
         seeds=_int_values(args.seeds, [101]),
         top_k_values=_int_values(args.top_k, [384, 512, 640]),
         bridge_fused_weights=_float_values(args.bridge_fused_weights, [0.1, 0.2, 0.3]),
+        support_variants=list(dict.fromkeys(args.support_variant)),
         bridge_score_source=str(args.bridge_score_source),
         bridge_alpha=float(args.bridge_alpha),
         bridge_exclude_datasets=list(dict.fromkeys(args.bridge_exclude_dataset)),

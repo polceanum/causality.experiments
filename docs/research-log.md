@@ -30,6 +30,35 @@ signals. Keep this focused on what was tried and what was learned.
   `tests/test_report_waterbirds_bridge_support.py`, and
   `tests/test_run_waterbirds_bridge_fused_sweep.py`.
 
+## 2026-05-02: Bridge Support-Composition Iteration
+
+- Extended `scripts/run_waterbirds_bridge_fused_sweep.py` with opt-in support
+  variants for the bridge-fused score file: hard env filtering, margin gating,
+  stats fill, soft env penalty, stats anchor, and monotone score-shape variants
+  (`score_sqrt`, `score_square`). These variants keep the same official DFR
+  comparator, stats control, random-score controls, and official causal-shrink
+  consumer.
+- Compact seeds `101`/`102`, five retrains, top-512: hard `env_filter` and
+  `stats_fill` both improved over incumbent `bridge_fused/w0.3/top512` by about
+  `+0.00044` mean WGA and cleared stats/random controls; `margin_gate`
+  regressed.
+- Full five-seed, 50-retrain gate for `env_filter` did not promote. The
+  incumbent stayed better with mean WGA `0.9367601395`; `env_filter` reached
+  `0.9361370683`, with mean delta to official DFR `+0.0056074858`, mean delta
+  to stats `+0.0024922132`, but only `3/5` non-negative deltas against the
+  best random control. Interpretation: hard shortcut filtering preserves some
+  upside but over-prunes important support on seeds `103`/`104`.
+- Softer follow-ups did not produce a larger compact margin. `soft_env_penalty`
+  top-512 improved only about `+0.00022` over the compact incumbent;
+  `stats_anchor` regressed. A top-k scan over `384/512/640/768` kept top-512 as
+  the only useful region. Monotone score-shape variants `score_sqrt` and
+  `score_square` tied the incumbent exactly in compact, suggesting the current
+  official-shrink consumer is insensitive to those rank-preserving transforms.
+- Stop rule: do not spend more full-budget compute on simple support filtering,
+  stats anchoring, top-k widening/narrowing, or monotone score shaping around
+  `w0.3/top512`. The next improvement branch should change bridge supervision
+  or the official-compatible consumer objective more substantially.
+
 ## 2026-04-22
 
 - Read the source document, which is a survey and experiment blueprint rather

@@ -106,6 +106,7 @@ def test_bridge_fused_sweep_reports_paired_deltas(tmp_path: Path, monkeypatch) -
         seeds=[101],
         top_k_values=[1],
         bridge_fused_weights=[0.2],
+        support_variants=["env_filter", "soft_env_penalty", "score_square"],
         bridge_score_source="bridge_fused",
         bridge_alpha=10.0,
         bridge_exclude_datasets=[],
@@ -121,5 +122,12 @@ def test_bridge_fused_sweep_reports_paired_deltas(tmp_path: Path, monkeypatch) -
     assert candidate_summary["mean_delta_to_baseline"] == 0.009999999999999898
     assert candidate_summary["mean_delta_to_stats"] == 0.019999999999999907
     assert candidate_summary["non_negative_best_random_seeds"] == 1
+    labels = {candidate["label"] for candidate in summary["candidates"]}
+    assert "bridge_fused_w0p2_env_filter_top1" in labels
+    assert "bridge_fused_w0p2_soft_env_penalty_top1" in labels
+    assert "bridge_fused_w0p2_score_square_top1" in labels
+    assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_env_filter.csv").exists()
+    assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_soft_env_penalty.csv").exists()
+    assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_score_square.csv").exists()
     random_summary = summary["random_controls"][0]
     assert random_summary["label"] == "random_score_0_top1"

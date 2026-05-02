@@ -250,6 +250,26 @@ issues unless they invalidate an experimental result.
 
 ## 2026-05-01
 
+- **Simple support filtering around the refreshed bridge-fused candidate**
+  - Attempt: use support diagnostics from `bridge_fused/w0.3/top512` to create
+    official-shrink score variants that demote env-dominant bridge-selected
+    features or reshape the bridge score before discovery-score ingestion.
+    Variants included `env_filter`, `margin_gate`, `stats_fill`,
+    `soft_env_penalty`, `stats_anchor`, `score_sqrt`, and `score_square`.
+  - Result: hard `env_filter` and `stats_fill` looked slightly better than the
+    incumbent on compact seeds `101`/`102`, but `env_filter` failed the full
+    five-seed 50-retrain promotion gate. It reached mean WGA `0.9361370683`,
+    below incumbent `0.9367601395`, and was non-negative against the best random
+    control on only `3/5` seeds. `margin_gate` and `stats_anchor` regressed;
+    `score_sqrt` and `score_square` tied the compact incumbent exactly.
+  - Interpretation: the incumbent already avoids most env-dominant features;
+    simple post-hoc filtering over-prunes useful support, and rank-preserving
+    score transforms do not meaningfully alter the current official-shrink
+    selection path.
+  - Action: keep the support-variant tooling for diagnostics, but do not spend
+    more full-budget compute on these local variants. Move next to better bridge
+    supervision or a materially different official-compatible consumer.
+
 - **Active latent patch-probe stack as a Waterbirds improvement path**
   - Attempt: build a trainable patch-level counterfactual probe over frozen
     DINO hidden states and official-DFR component features. Variants included a
