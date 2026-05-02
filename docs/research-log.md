@@ -3,6 +3,33 @@
 Chronological notes about experiments, implementation choices, and empirical
 signals. Keep this focused on what was tried and what was learned.
 
+## 2026-05-02: Bridge Candidate Manifest and Support Audit
+
+- Added `scripts/report_waterbirds_bridge_candidate.py`, which builds a
+  checksum-backed promotion report from the paired bridge-fused random-control
+  CSV/JSON artifacts, the score CSV directory, and the refreshed trace snapshot.
+- Generated `outputs/dfr_sweeps/bridge-fused-candidate-report.md` and JSON from
+  the existing `bridge_fused/w0.3/top512` five-seed run. The report recomputes
+  the best-random gate from raw rows: candidate mean WGA `0.9367601395`, mean
+  paired delta to official DFR `+0.0062305570`, mean delta to stats
+  `+0.0031152844`, mean delta to best random by seed `+0.0021807075`, and
+  non-negative best-random deltas on `5/5` seeds.
+- Added `scripts/report_waterbirds_bridge_support.py` to compare score-selected
+  top-k supports against a clue CSV. On current top-512 artifacts,
+  `bridge_fused/w0.3` overlaps stats on `311/512` features (`0.4362` Jaccard),
+  while deterministic random-score controls overlap only `124`-`145` features
+  (`0.1378`-`0.1650` Jaccard).
+- Support diagnostics suggest the bridge-fused candidate is not merely a random
+  perturbation of stats: it preserves a large stats-compatible support while
+  selecting far fewer env-dominant features (`5` with `env_corr >= label_corr`)
+  than random controls (`91`-`93`). This points the next improvement branch
+  toward support-composition filters and official-compatible score-to-scale
+  transforms rather than tiny local blend/top-k sweeps.
+- Focused tests passed for the new reporting scripts and existing bridge fused
+  runner: `tests/test_report_waterbirds_bridge_candidate.py`,
+  `tests/test_report_waterbirds_bridge_support.py`, and
+  `tests/test_run_waterbirds_bridge_fused_sweep.py`.
+
 ## 2026-04-22
 
 - Read the source document, which is a survey and experiment blueprint rather

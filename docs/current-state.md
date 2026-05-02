@@ -23,8 +23,8 @@ what is the bar, what should be tried next, and what should not be repeated.
 
 ## Current Snapshot
 
-- Full local regression suite is green at `157 passed` after the latest
-  bridge-causal runner addition.
+- Full local regression suite is green at `159 passed` after the bridge
+  candidate reporting and support-audit tooling addition.
 - The repo has a runnable PyTorch experiment harness for all eight paper
   fixtures and a local Waterbirds benchmark path.
 - Runnable methods include `constant`, `oracle`, `erm`, `dfr`, `causal_dfr`,
@@ -57,6 +57,8 @@ conda run -n orpheus python scripts/run_waterbirds_official_representation_sweep
 conda run -n orpheus python scripts/run_waterbirds_official_backbone_sweep.py
 conda run -n orpheus python scripts/run_waterbirds_clue_seed_stability.py
 conda run -n orpheus python scripts/run_llm_counterfactual_clue_probe.py --config configs/experiments/01_synthetic_linear.yaml --llm-backend mock
+conda run -n orpheus python scripts/report_waterbirds_bridge_candidate.py
+conda run -n orpheus python scripts/report_waterbirds_bridge_support.py
 ```
 
 ## Benchmark Bar
@@ -236,6 +238,17 @@ Decision:
   crossed the local promotion gap against official DFR, stats, and matched
   random controls; the next audit step is to make the trace snapshot or score
   artifact part of a durable benchmark manifest.
+- `scripts/report_waterbirds_bridge_candidate.py` now turns the paired CSV,
+  score files, and trace snapshot into a checksum-backed promotion report. The
+  generated report at `outputs/dfr_sweeps/bridge-fused-candidate-report.md`
+  recomputes the candidate-vs-best-random gate from raw rows and records score
+  CSV SHA256 hashes.
+- `scripts/report_waterbirds_bridge_support.py` now summarizes the selected
+  top-k support behind the incumbent. On the current top-512 artifacts,
+  `bridge_fused/w0.3` overlaps stats on `311/512` features (`0.4362` Jaccard),
+  while deterministic random controls overlap only `124`-`145` features
+  (`0.1378`-`0.1650` Jaccard). Bridge-fused selects only `5` features where
+  `env_corr >= label_corr`, versus `91`-`93` for random controls.
 
 ### Clue Fusion and Discovery Masks
 
@@ -295,28 +308,27 @@ Decision:
 
 ## Near-Term Plan
 
-1. Build the trainable clue bridge.
-   - Add a replay backend for planner outputs.
-   - Train a small ranker/contextual bandit over latent packets, proposed
-     actions, and measured test results.
-   - Evaluate against stats and deterministic random on held-out fixture
-     families before touching Waterbirds downstream consumers.
+1. Freeze the active bridge result as a durable benchmark artifact.
+   - Keep using the snapshotted trace directory, score CSV hashes, paired rows,
+     stats control, and deterministic random-score controls.
+   - Treat mutable ignored output directories as insufficient for future claims
+     unless a report/manifest records the exact files used.
 
-2. Keep Track A honest.
-   - Use `official_dfr_val_tr_retrains50` as the paired comparator.
-   - Run only mechanism changes that are qualitatively different from the
-     exhausted causal-DFR/shrink/swap grids.
-   - Report mean paired delta, minimum paired delta, and variance.
+2. Use support diagnostics to define the next candidate family.
+   - The incumbent is not random-like: it shares much more support with stats
+     while avoiding the random controls' env-dominant selected features.
+   - Next official-feature variants should test support composition and
+     score-to-scale transforms, not tiny local `w0.3` perturbations.
 
-3. Revisit representation generation only with structure.
-   - Avoid full runs for the failed global sampling/contrast recipes.
-   - If using component features again, make extraction efficient,
-     checkpointed, and provenance-audited first.
-   - Prefer interventions that preserve foreground/bird signal while reducing
-     background shortcut reliance.
+3. Improve bridge supervision only behind held-out gates.
+   - Try pairwise/listwise ranking or a two-stage artifact-risk bridge, but
+     require held-out fixture improvement or a compact Waterbirds screen before
+     50-retrain promotion.
+   - Do not re-add raw activation-gap fields directly without a versioned corpus
+     and held-out win.
 
 4. Keep benchmark reporting current.
-   - Compare serious Waterbirds rows against `docs/literature-context.md`.
+   - Refresh `docs/literature-context.md` before any benchmark-facing claim.
    - Keep `docs/research-log.md` updated after meaningful experiment rounds.
    - Move failed or weak paths into `docs/failed-attempts.md` once the lesson is
      clear.
