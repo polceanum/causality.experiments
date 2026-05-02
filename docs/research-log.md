@@ -1085,3 +1085,28 @@ signals. Keep this focused on what was tried and what was learned.
   treating it as a benchmark headline, freeze or version the replay trace/score
   generation and add matched random/control score checks under the same paired
   runner.
+
+## 2026-05-02: Matched Random Controls for Refreshed Bridge Candidate
+
+- Extended `scripts/run_waterbirds_bridge_fused_sweep.py` with deterministic
+  random discovery-score controls. Unlike the older hard random-mask path, these
+  controls write random score CSVs and run through the same top-k,
+  `discovery_score_soft_selection: selected`, and official causal-shrink DFR
+  consumer as the bridge-fused score file.
+- Snapshotted the refreshed fixture corpus at
+  `outputs/dfr_sweeps/llm_clue_fixture_experiments_20260502_refreshed`. A
+  seed-101 full 50-retrain sanity check using `--bridge-input-dir` pointed at
+  this snapshot reproduced the active candidate WGA `0.9376947284`.
+- Ran the full 50-retrain matched-control screen for seeds `101`-`105`,
+  `bridge_fused/w0.3/top512`, and three deterministic random score controls.
+  The bridge candidate stayed at mean WGA `0.9367601395`, mean delta
+  `+0.0062305570` to official DFR, and mean delta `+0.0031152844` to stats.
+- Random controls were weaker on average. The best random-control mean WGA was
+  `0.9317757010`; the other two means were `0.9293299079` and `0.9280115604`.
+  Candidate minus best-random-by-seed had mean `+0.0021807075`, minimum `0.0`,
+  and `5/5` non-negative paired seeds.
+- Interpretation: the refreshed bridge candidate now clears official DFR,
+  stats, and matched random-score controls under the same downstream consumer.
+  The remaining benchmark-facing gap is packaging provenance: attach the trace
+  snapshot or generated score file to a durable manifest before writing a final
+  claim table.

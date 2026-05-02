@@ -223,10 +223,19 @@ Decision:
   mean paired delta `+0.0062305570` to the seed-matched official DFR baseline,
   and mean delta `+0.0031152844` to the stats top-512 control. All five seeds
   are positive against the official baseline and non-negative against stats.
-- Treat `bridge_fused/w0.3/top512` as the new active Track A candidate. It has
-  crossed the earlier local promotion gap, but it still needs a reproducible
-  frozen trace/score artifact and matched random/control checks before becoming
-  a benchmark headline.
+- Matched random-score controls now run through the same discovery-score,
+  pruned-soft-score, official-shrink consumer path. Across three deterministic
+  random score controls and the same five seeds, the best random-control mean
+  WGA was `0.9317757010`; the bridge candidate beat the best random control on
+  mean by `+0.0049844384` WGA and was non-negative against the best random
+  control on every seed, with mean paired delta `+0.0021807075`.
+- The refreshed fixture trace corpus used for this result is snapshotted under
+  `outputs/dfr_sweeps/llm_clue_fixture_experiments_20260502_refreshed`, and a
+  seed-101 sanity rerun from that path reproduced candidate WGA `0.9376947284`.
+  Treat `bridge_fused/w0.3/top512` as the new active Track A candidate. It has
+  crossed the local promotion gap against official DFR, stats, and matched
+  random controls; the next audit step is to make the trace snapshot or score
+  artifact part of a durable benchmark manifest.
 
 ### Clue Fusion and Discovery Masks
 

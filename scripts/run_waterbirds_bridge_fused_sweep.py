@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import copy
 import csv
+import hashlib
 import itertools
 import json
 from pathlib import Path
@@ -52,6 +53,36 @@ def _metric_payload(run_dir: Path) -> dict[str, float]:
     return dict(payload["metrics"])
 
 
+def _stable_random_score(*, control_index: int, feature_index: str, feature_name: str) -> float:
+    payload = f"{control_index}:{feature_index}:{feature_name}".encode("utf-8")
+    digest = hashlib.sha256(payload).hexdigest()[:16]
+    return int(digest, 16) / float(16**16 - 1)
+
+
+def build_random_score_rows(clue_rows: list[dict[str, Any]], *, control_index: int) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for row in clue_rows:
+        feature_index = str(row.get("feature_index", ""))
+        feature_name = str(row.get("feature_name", ""))
+        score = _stable_random_score(
+            control_index=control_index,
+            feature_index=feature_index,
+            feature_name=feature_name,
+        )
+        rows.append(
+            {
+                "dataset": str(row.get("dataset", "")),
+                "feature_index": feature_index,
+                "feature_name": feature_name,
+                "support_score": f"{score:.6f}",
+                "rank_score": f"{score:.6f}",
+                "score": f"{score:.6f}",
+                "score_source": f"random_score_{control_index}",
+            }
+        )
+    return rows
+
+
 def _row(
     *,
     row_type: str,
@@ -87,14 +118,28 @@ def _row(
 
 def _summary(rows: list[dict[str, str]]) -> dict[str, Any]:
     groups: dict[str, list[dict[str, str]]] = {}
+    random_groups: dict[str, list[dict[str, str]]] = {}
+    best_random_by_seed_top_k: dict[tuple[str, str], float] = {}
     for row in rows:
         if row["row_type"] == "candidate":
             groups.setdefault(row["label"], []).append(row)
+        elif row["row_type"] == "random_control":
+            random_groups.setdefault(row["label"], []).append(row)
+            key = (row["seed"], row["top_k"])
+            best_random_by_seed_top_k[key] = max(
+                best_random_by_seed_top_k.get(key, float("-inf")),
+                float(row["test_wga"]),
+            )
     candidates: list[dict[str, Any]] = []
     for label, items in sorted(groups.items()):
         wgas = [float(item["test_wga"]) for item in items]
         baseline_deltas = [float(item["delta_to_baseline"]) for item in items if item["delta_to_baseline"]]
         stats_deltas = [float(item["delta_to_stats"]) for item in items if item["delta_to_stats"]]
+        random_deltas = [
+            float(item["test_wga"]) - best_random_by_seed_top_k[(item["seed"], item["top_k"])]
+            for item in items
+            if (item["seed"], item["top_k"]) in best_random_by_seed_top_k
+        ]
         candidates.append(
             {
                 "label": label,
@@ -106,12 +151,34 @@ def _summary(rows: list[dict[str, str]]) -> dict[str, Any]:
                 "min_delta_to_baseline": min(baseline_deltas) if baseline_deltas else 0.0,
                 "mean_delta_to_stats": statistics.mean(stats_deltas) if stats_deltas else 0.0,
                 "min_delta_to_stats": min(stats_deltas) if stats_deltas else 0.0,
+                "mean_delta_to_best_random": statistics.mean(random_deltas) if random_deltas else 0.0,
+                "min_delta_to_best_random": min(random_deltas) if random_deltas else 0.0,
                 "non_negative_baseline_seeds": sum(delta >= 0.0 for delta in baseline_deltas),
                 "non_negative_stats_seeds": sum(delta >= 0.0 for delta in stats_deltas),
+                "non_negative_best_random_seeds": sum(delta >= 0.0 for delta in random_deltas),
             }
         )
     candidates.sort(key=lambda item: (item["mean_delta_to_baseline"], item["mean_delta_to_stats"]), reverse=True)
-    return {"candidates": candidates}
+    random_controls: list[dict[str, Any]] = []
+    for label, items in sorted(random_groups.items()):
+        wgas = [float(item["test_wga"]) for item in items]
+        baseline_deltas = [float(item["delta_to_baseline"]) for item in items if item["delta_to_baseline"]]
+        stats_deltas = [float(item["delta_to_stats"]) for item in items if item["delta_to_stats"]]
+        random_controls.append(
+            {
+                "label": label,
+                "count": len(items),
+                "mean_test_wga": statistics.mean(wgas),
+                "min_test_wga": min(wgas),
+                "max_test_wga": max(wgas),
+                "mean_delta_to_baseline": statistics.mean(baseline_deltas) if baseline_deltas else 0.0,
+                "min_delta_to_baseline": min(baseline_deltas) if baseline_deltas else 0.0,
+                "mean_delta_to_stats": statistics.mean(stats_deltas) if stats_deltas else 0.0,
+                "min_delta_to_stats": min(stats_deltas) if stats_deltas else 0.0,
+            }
+        )
+    random_controls.sort(key=lambda item: (item["mean_delta_to_baseline"], item["mean_delta_to_stats"]), reverse=True)
+    return {"candidates": candidates, "random_controls": random_controls}
 
 
 def run_bridge_fused_sweep(
@@ -130,6 +197,7 @@ def run_bridge_fused_sweep(
     bridge_alpha: float,
     bridge_exclude_datasets: list[str],
     card_top_k: int,
+    random_control_count: int,
     num_retrains: int,
     training_device: str | None,
     output_root: Path,
@@ -147,6 +215,11 @@ def run_bridge_fused_sweep(
     clue_rows = build_feature_clue_rows(bundle, split_name="train")
     stats_path = out_dir / "scores_stats.csv"
     write_csv_rows(stats_path, build_source_score_rows(clue_rows, "stats"))
+    random_paths: dict[int, Path] = {}
+    for control_index in range(max(0, int(random_control_count))):
+        score_path = out_dir / f"scores_random_control_{control_index}.csv"
+        write_csv_rows(score_path, build_random_score_rows(clue_rows, control_index=control_index))
+        random_paths[control_index] = score_path
     bridge_paths: dict[float, Path] = {}
     source = bridge_score_source.strip().lower()
     if source not in {"bridge_fused", "bridge_gated"}:
@@ -247,6 +320,34 @@ def run_bridge_fused_sweep(
                 )
             )
 
+        for seed, top_k, control_index in itertools.product(seeds, top_k_values, sorted(random_paths)):
+            label = f"random_score_{control_index}"
+            random_config = build_downstream_candidate(
+                {**copy.deepcopy(candidate_base), "seed": seed},
+                label="bridge_fused",
+                top_k=top_k,
+                score_path=random_paths[control_index],
+                prune_soft_scores=True,
+            )
+            random_config["name"] = f"{candidate_base.get('name', 'bridge_fused')}_{label}_top{top_k}_seed{seed}"
+            random_path_tmp = tmp_root / f"{random_config['name']}.yaml"
+            random_path_tmp.write_text(yaml.safe_dump(random_config, sort_keys=False), encoding="utf-8")
+            random_run = run_experiment(random_path_tmp, output_root)
+            random_metrics = _metric_payload(random_run)
+            write_row(
+                _row(
+                    row_type="random_control",
+                    label=f"{label}_top{top_k}",
+                    seed=seed,
+                    top_k=top_k,
+                    weight=None,
+                    run_dir=random_run,
+                    metrics=random_metrics,
+                    baseline_metrics=baseline_by_seed[seed],
+                    stats_metrics=stats_by_seed_top_k[(seed, top_k)],
+                )
+            )
+
         for seed, top_k, weight in itertools.product(seeds, top_k_values, bridge_fused_weights):
             label = f"{source}_{_weight_label(weight)}"
             config = build_downstream_candidate(
@@ -284,6 +385,7 @@ def run_bridge_fused_sweep(
             "top_k_values": top_k_values,
             "bridge_fused_weights": bridge_fused_weights,
             "bridge_score_source": source,
+            "random_control_count": random_control_count,
             "num_retrains": num_retrains,
             "bridge_alpha": bridge_alpha,
             "bridge_exclude_datasets": bridge_exclude_datasets,
@@ -309,6 +411,7 @@ def main() -> None:
     parser.add_argument("--bridge-alpha", type=float, default=10.0)
     parser.add_argument("--bridge-exclude-dataset", action="append", default=["waterbirds"])
     parser.add_argument("--card-top-k", type=int, default=16)
+    parser.add_argument("--random-control-count", type=int, default=0)
     parser.add_argument("--num-retrains", type=int, default=5)
     parser.add_argument("--training-device", default="")
     parser.add_argument("--output-root", default="outputs/runs")
@@ -329,6 +432,7 @@ def main() -> None:
         bridge_alpha=float(args.bridge_alpha),
         bridge_exclude_datasets=list(dict.fromkeys(args.bridge_exclude_dataset)),
         card_top_k=int(args.card_top_k),
+        random_control_count=int(args.random_control_count),
         num_retrains=int(args.num_retrains),
         training_device=args.training_device or None,
         output_root=Path(args.output_root),

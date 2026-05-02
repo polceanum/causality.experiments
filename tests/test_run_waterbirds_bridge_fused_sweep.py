@@ -110,6 +110,7 @@ def test_bridge_fused_sweep_reports_paired_deltas(tmp_path: Path, monkeypatch) -
         bridge_alpha=10.0,
         bridge_exclude_datasets=[],
         card_top_k=2,
+        random_control_count=1,
         num_retrains=1,
         training_device="cpu",
         output_root=tmp_path / "runs",
@@ -119,3 +120,6 @@ def test_bridge_fused_sweep_reports_paired_deltas(tmp_path: Path, monkeypatch) -
     candidate_summary = summary["candidates"][0]
     assert candidate_summary["mean_delta_to_baseline"] == 0.009999999999999898
     assert candidate_summary["mean_delta_to_stats"] == 0.019999999999999907
+    assert candidate_summary["non_negative_best_random_seeds"] == 1
+    random_summary = summary["random_controls"][0]
+    assert random_summary["label"] == "random_score_0_top1"
