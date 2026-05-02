@@ -212,10 +212,14 @@ Decision:
   reached test WGA `0.9345794320` with 50 retrains, versus a fresh locked
   official DFR comparator rerun at `0.9330217838` and a matching stats top-512
   control at `0.9314641953`.
-- Treat this as the first downstream bridge win, not yet a benchmark claim. It
-  is a seed-101 improvement of about `+0.00156`, below the current promotion
-  gate. Next step is paired multi-seed bridge-fused screening before changing
-  the benchmark headline.
+- `scripts/run_waterbirds_bridge_fused_sweep.py` now runs paired bridge-fused
+  screens with streamed rows. A two-seed 50-retrain check for `w0.2/top512`
+  produced mean WGA `0.9338006079`, mean delta `+0.0007788241` to official DFR,
+  and no negative seed deltas.
+- Treat this as a paired downstream bridge improvement, not yet a benchmark
+  claim. It is still below the current promotion gate. Next improvement should
+  target stronger bridge supervision or a downstream consumer beyond final-head
+  shrink, rather than tiny blend-weight changes around `0.2`.
 
 ### Clue Fusion and Discovery Masks
 

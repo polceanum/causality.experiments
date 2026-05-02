@@ -1000,3 +1000,27 @@ signals. Keep this focused on what was tried and what was learned.
   comparator on seed 101. This is the first downstream win, but it is below the
   existing promotion-gate margin and must be paired across more seeds before it
   is treated as a benchmark claim.
+
+## 2026-05-02: Paired Bridge-Fused Screening
+
+- Added `scripts/run_waterbirds_bridge_fused_sweep.py`, a paired sweep runner
+  that writes bridge-fused and stats score files, runs the locked official DFR
+  baseline by seed, and reports candidate deltas against both official DFR and
+  stats controls. Rows are flushed as each run finishes so long screens remain
+  inspectable.
+- Compact seed-101 screen around the prior winner confirmed that top-512 with
+  bridge weight `0.2` is the only useful local blend. At five retrains,
+  `w0.2/top512` reached `0.9330376983`; weights `0.15` and `0.25` collapsed to
+  the compact baseline at `0.9308204055`.
+- Two-seed 50-retrain paired screen for `w0.2/top512`:
+  - seed 101: official DFR `0.9330217838`, stats control `0.9314641953`,
+    bridge-fused `0.9345794320`.
+  - seed 102: official DFR `0.9330217838`, stats control `0.9330217838`,
+    bridge-fused `0.9330217838`.
+  - mean bridge-fused WGA `0.9338006079`, mean delta to official DFR
+    `+0.0007788241`, mean delta to stats `+0.0015576184`.
+- Interpretation: the downstream bridge-fused candidate is now paired and
+  non-negative on both tested seeds, with a small positive mean. It is still
+  below the current promotion gate; next improvement should target either a
+  stronger bridge target or a better consumer than final-head shrink, not just
+  small weight changes around `0.2`.
