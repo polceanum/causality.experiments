@@ -1,656 +1,306 @@
 # Current State and Plan
 
-This is the research handoff/state file. Update it after meaningful
-implementation or experiment rounds. Keep it focused on the causal-extraction
-goal, not incidental development mechanics.
+This is the compact research handoff. Keep detailed chronology in
+`docs/research-log.md`, and keep weak or failed paths in
+`docs/failed-attempts.md`. This file should answer: what is currently true,
+what is the bar, what should be tried next, and what should not be repeated.
 
 ## Operating Constraints
 
-- All core experiments must run locally on the Mac notebook using the existing
-  `orpheus` conda environment.
+- Run core work locally on the Mac notebook in the existing `orpheus` conda
+  environment.
 - Do not depend on paid LLM APIs, hosted model APIs, cloud jobs, or external
   processing services.
 - Do not replace or pip-install over the Mac-specific PyTorch already present in
   `orpheus`.
-- Any real benchmark adapter must retain a tiny local fixture and a modest
-  smoke-test path.
-- Prefer methods that can produce useful research signal through small models,
-  controlled fixtures, and seed sweeps within local compute limits.
-- CI should remain a lightweight regression guardrail, not a full experiment
-  runner.
+- Keep CI lightweight: regression tests plus tiny smoke paths, not full
+  experiments.
+- Every real benchmark adapter needs a tiny local fixture and a modest smoke
+  path.
+- Treat fixture wins as development signals only. Literature-facing claims need
+  real benchmark adapters, matching assumptions, seed checks, and published
+  reference context.
 
-## Current State
+## Current Snapshot
 
-- Research target:
-  surpass published state-of-the-art on at least one real, literature-aligned
-  benchmark under matching local-compute assumptions. Fixture wins are only
-  development signals.
-- `main` is pushed to GitHub.
-- Latest pushed commit before the current working round:
-  - `b14de44` `Add intervention feature table probe screen`
-- The repo contains a runnable PyTorch experiment harness for all 8 paper
-  experiments using tiny generated fixtures.
-- Runnable methods:
-  - `constant`
-  - `oracle`
-  - `erm`
-  - `dfr`
-  - `causal_dfr`
-  - `group_balanced_erm`
-  - `group_dro`
-  - `irm`
-  - `jtt`
-  - `adversarial_probe`
-  - `counterfactual_adversarial`
-  - `counterfactual_augmentation`
-- Sequence fixtures now use integer tokens, an embedding-pooling classifier,
-  and token-specific counterfactual augmentation.
-- Seed-sweep scripts are available and have been run on `07_text_toy` and
-  `08_fewshot_ner`; robust methods improve mean WGA but with high variance.
-- Group-balanced ERM and GroupDRO are implemented as local PyTorch baselines.
-- Group-balanced ERM is now a strong baseline on known-group fixtures and must
-  be included in future claims.
-- JTT is implemented as a local two-stage baseline. It is strong on the
-  Waterbirds-style fixture but not uniformly strong on sequence fixtures.
-- Hidden-representation extraction and linear causal/nuisance probe diagnostics
-  are implemented for small local models.
-- Adversarial probe training is implemented. It is promising on Waterbirds-style
-  fixtures but currently ineffective on text-toy.
-- Counterfactual adversarial training is implemented. It combines nuisance
-  counterfactual augmentation, factual/counterfactual consistency, and
-  gradient-reversal environment suppression.
-- Adapter stubs still intentionally remain for heavier methods:
-  causal probes, beta-VAE/iVAE, CITRIS, CSML, and DeepIV.
-- Core commands:
-  - `conda run -n orpheus python -m pytest`
-  - `conda run -n orpheus python scripts/run_all_fixtures.py`
-  - `conda run -n orpheus python scripts/run_method_sweep.py`
-  - `conda run -n orpheus python scripts/report_best_methods.py`
-  - `conda run -n orpheus python scripts/write_research_report.py`
-  - `conda run -n orpheus python scripts/run_seed_sweep.py --match 07 --seeds 11,12,13`
-  - `conda run -n orpheus python scripts/report_seed_sweep.py --match 07`
-  - `conda run -n orpheus python scripts/report_probe_diagnostics.py --match 05_waterbirds`
-  - `conda run -n orpheus python scripts/run_llm_counterfactual_clue_probe.py --config configs/experiments/01_synthetic_linear.yaml --llm-backend mock`
-  - `conda run -n orpheus python scripts/report_benchmark_alignment.py`
-  - `conda run -n orpheus python -m causality_experiments run --config configs/benchmarks/waterbirds_features.yaml`
-  - `conda run -n orpheus python scripts/run_method_sweep.py --config configs/benchmarks/waterbirds_features.yaml --skip-incompatible --dry-run`
-  - `conda run -n orpheus python scripts/run_method_sweep.py --config configs/benchmarks/waterbirds_features.yaml --skip-incompatible`
-  - `conda run -n orpheus python -m causality_experiments summarize --runs outputs/runs`
-- GitHub Actions CI runs `pytest` plus a tiny CLI smoke test on pushes and pull
-  requests.
-- Result reports should include literature context where possible. Tiny fixture
-  results are not SOTA claims; real benchmark adapters are required for direct
-  comparison to published numbers.
-- Experiment configs include explicit benchmark metadata marking whether a run
-  is a synthetic/local fixture or a real literature-comparable benchmark.
-- A local Waterbirds feature-table adapter is available as the first
-  literature-aligned benchmark path.
-- Benchmark reporting now has a direct comparison view. The alignment report
-  shows our latest benchmark-aligned rows next to Waterbirds ERM, JTT,
-  GroupDRO, and DFR references, plus delta-to-reference columns and explicit
-  statuses such as `fixture_only` and `blocked_missing_local_data`.
-- The research report now includes explicit Waterbirds gate-control and compact
-  gate-mechanism sections so discovery-vs-random comparisons are visible in one
-  generated artifact.
-- The repo now also has a compact-to-full validation artifact:
-  `outputs/runs/waterbirds-compact-promotion-alignment.csv`, generated by
-  `scripts/report_compact_promotion_alignment.py`.
-- The real-benchmark status now also checks benchmark provenance. A local CSV is
-  not enough by itself; the Waterbirds config must document feature extractor,
-  feature source, and split semantics before the repo treats the comparison as
-  benchmark-ready.
-- DFR is now the benchmark-facing Waterbirds anchor on the fixed ResNet feature
-  table. Tuned single-seed results are about `0.897` test WGA for plain `dfr`
-  and about `0.900` test WGA for `causal_dfr`, versus the literature DFR WGA
-  reference of `0.929`.
+- Full local regression suite and GitHub Actions are green at `146` tests.
+- The repo has a runnable PyTorch experiment harness for all eight paper
+  fixtures and a local Waterbirds benchmark path.
+- Runnable methods include `constant`, `oracle`, `erm`, `dfr`, `causal_dfr`,
+  `group_balanced_erm`, `group_dro`, `irm`, `jtt`, `adversarial_probe`,
+  `counterfactual_adversarial`, and `counterfactual_augmentation`.
+- Adapter stubs remain for heavier methods: causal probes, beta-VAE/iVAE,
+  CITRIS, CSML, and DeepIV.
+- The active research target is a real, literature-aligned benchmark result
+  that beats the relevant local comparator under matching local-compute
+  assumptions. The main benchmark-facing target remains Waterbirds.
+
+## Core Commands
+
+```bash
+conda run -n orpheus python -m pytest
+conda run -n orpheus python scripts/run_all_fixtures.py
+conda run -n orpheus python scripts/run_method_sweep.py
+conda run -n orpheus python scripts/report_best_methods.py
+conda run -n orpheus python scripts/write_research_report.py
+conda run -n orpheus python -m causality_experiments summarize --runs outputs/runs
+```
+
+Waterbirds and clue-specific entry points:
+
+```bash
+conda run -n orpheus python scripts/report_benchmark_alignment.py
+conda run -n orpheus python scripts/run_waterbirds_official_dfr.py
+conda run -n orpheus python scripts/run_waterbirds_official_causal_dfr_sweep.py
+conda run -n orpheus python scripts/run_waterbirds_official_representation_sweep.py
+conda run -n orpheus python scripts/run_waterbirds_official_backbone_sweep.py
+conda run -n orpheus python scripts/run_waterbirds_clue_seed_stability.py
+conda run -n orpheus python scripts/run_llm_counterfactual_clue_probe.py --config configs/experiments/01_synthetic_linear.yaml --llm-backend mock
+```
+
+## Benchmark Bar
+
+### Waterbirds Comparator
+
+- The official-aligned local comparator is
+  `official_dfr_val_tr_retrains50` on
+  `data/waterbirds/features_official_erm_official_repro.csv`.
+- Its current local test WGA is about `0.933`. This is the bar for Track A
+  Waterbirds mechanism claims.
+- Against the currently recorded literature SOTA/reference DFR WGA `0.929`, the
+  local 50-retrain official comparator is about `+0.004` WGA. Treat this as a
+  validated reproduction/comparator, not as a proposed-method improvement.
+- The legacy `waterbirds_features_dfr` config still runs on
+  `data/waterbirds/features.csv`, but its latest local test WGA is about
+  `0.897`, so it is a historical anchor rather than the benchmark-facing bar.
+- The older 20-retrain comparator at about `0.931` is useful for historical
+  continuity, but should not be the promotion bar.
 - DFR validation metrics are protocol diagnostics, not unbiased holdout metrics,
-  because `dfr` and `causal_dfr` train their final classifier on validation
-  groups.
-- Current DFR-native follow-ups are implemented behind opt-in config flags:
-  deterministic loss-weighted group balancing, group-weight power, DFR-head
-  counterfactual consistency, and soft-score `causal_dfr` nuisance priors.
-- First Waterbirds probes did not produce a promotable DFR variant: loss-weighted
-  DFR fell to about `0.875` test WGA, counterfactual consistency tied the tuned
-  anchor, hard/soft causal-DFR regularization sweeps tied at best around
-  `0.900`, and sampler group-weight powers away from `1.0` degraded WGA.
-- Additional DFR gap-closing probes also failed to improve the anchor:
-  representation-level DFR with an ERM MLP encoder fell to about `0.713` test
-  WGA, LBFGS full-batch logistic DFR overfit validation and stayed near `0.80`
-  test WGA, validation-threshold calibration had no principled test upside over
-  `causal_dfr`, exact balanced validation subsampling underperformed replacement
-  sampling, and train-feature standardization dropped DFR/causal-DFR to about
-  `0.875`/`0.872` test WGA.
-- The Waterbirds feature-prep path now supports protocol-aligned feature export:
-  `scripts/prepare_waterbirds_features.py --erm-finetune-epochs <n>
-  --erm-finetune-mode layer4 --features-csv data/waterbirds/features_erm_layer4_e<n>.csv
-  --config <matching-config> --overwrite-features`. This trains a target ERM
-  ResNet classifier on the Waterbirds train split before exporting penultimate
-  features, which is closer to the original DFR setup than frozen ImageNet
-  features.
-- The first protocol-aligned Waterbirds ERM-layer4 feature ladder did not close
-  the DFR gap. Using `scripts/run_waterbirds_erm_feature_dfr.py --epochs 1,3,5
-  --mode layer4 --batch-size 32 --lr 0.0001 --weight-decay 0.0001`, the best
-  result was epoch 3 `causal_dfr` at about `0.893` test WGA and `0.941` test
-  accuracy. Epoch 1 reached about `0.874` test WGA for both DFR variants; epoch
-  5 regressed to about `0.877`/`0.875` test WGA for `dfr`/`causal_dfr`.
-  Validation WGA stayed high around `0.938`-`0.942`, reinforcing that DFR
-  validation metrics are protocol diagnostics, not model-selection holdouts.
-  The fixed-feature tuned anchors (`dfr` about `0.897`, `causal_dfr` about
-  `0.900`) remain stronger locally.
-- An SGD plus train-time augmentation probe over the same layer4 fine-tuning
-  path also failed to close the DFR gap. Using
-  `scripts/run_waterbirds_erm_feature_dfr.py --epochs 3 --mode layer4 --tag
-  sgd_aug --optimizer sgd --augment --batch-size 32 --lr 0.001 --weight-decay
-  0.0001`, both `dfr` and `causal_dfr` reached about `0.889` test WGA, below
-  the fixed-feature tuned anchors and the earlier Adam/no-augmentation e3
-  `causal_dfr` run. This suggests the next protocol probe should change the
-  trainable backbone scope or training recipe rather than repeating layer4-only
-  DFR heads.
-- Full-backbone SGD plus train-time augmentation at learning rate `0.001` also
-  failed to close the gap. Using
-  `scripts/run_waterbirds_erm_feature_dfr.py --epochs 3 --mode all --tag
-  sgd_aug_all_lr1e3 --optimizer sgd --augment --batch-size 32 --lr 0.001
-  --weight-decay 0.0001`, both `dfr` and `causal_dfr` reached about `0.877`
-  test WGA despite about `0.929` test accuracy. The high average accuracy with
-  weaker WGA suggests this setting is too aggressive or insufficiently robust
-  for minority groups.
-- Full-backbone SGD plus train-time augmentation at learning rate `0.0001` was
-  also negative. Using `scripts/run_waterbirds_erm_feature_dfr.py --epochs 3
-  --mode all --tag sgd_aug_all_lr1e4 --optimizer sgd --augment --batch-size 32
-  --lr 0.0001 --weight-decay 0.0001`, both `dfr` and `causal_dfr` reached
-  about `0.863` test WGA and about `0.904` test accuracy. This lower learning
-  rate did not rescue full-backbone ERM features and performed below the
-  `0.001` probe and the fixed-feature tuned anchors.
-- Group-balanced full-backbone SGD plus train-time augmentation at learning
-  rate `0.0001` partially repaired the full-backbone failure but still did not
-  beat the fixed-feature anchor. Using
-  `scripts/run_waterbirds_erm_feature_dfr.py --epochs 3 --mode all --tag
-  gb_sgd_aug_all_lr1e4 --optimizer sgd --augment --balance-groups --batch-size
-  32 --lr 0.0001 --weight-decay 0.0001`, `dfr` reached about `0.889` test WGA
-  and `causal_dfr` reached about `0.893` test WGA. This validates group-aware
-  backbone training as a useful protocol axis, but it remains below the tuned
-  fixed-feature `causal_dfr` WGA around `0.900` and far below the literature DFR
-  reference `0.929`.
-- Group-balanced full-backbone SGD plus train-time augmentation at learning
-  rate `0.001` produced the best local full-backbone single-seed result so far,
-  but it still does not close the literature gap. Using
-  `scripts/run_waterbirds_erm_feature_dfr.py --epochs 3 --mode all --tag
-  gb_sgd_aug_all_lr1e3 --optimizer sgd --augment --balance-groups --batch-size
-  32 --lr 0.001 --weight-decay 0.0001`, `dfr` reached about `0.903` test WGA
-  and `causal_dfr` reached about `0.905` test WGA. This edges past the fixed
-  feature `causal_dfr` anchor around `0.900`, but only by a small single-seed
-  margin and it still trails the literature DFR reference `0.929` by about
-  `0.024`. Treat it as a diagnostic lift, not a promotable closure of the gap.
-- The repo now has a separate official-aligned comparator path for Waterbirds
-  DFR reproduction: `configs/benchmarks/waterbirds_features_official_dfr_val_tr.yaml`
-  plus `scripts/run_waterbirds_official_dfr.py`. This path is intended to match
-  the published `DFRVal^Tr` protocol more closely than the local Adam-based DFR
-  head, and should be the main benchmark-facing comparator until we know
-  whether the remaining gap is mostly protocol or representation.
-- The official-aligned Waterbirds comparator now works end to end on local
-  data. Using the exported feature table
-  `data/waterbirds/features_official_erm_official_repro.csv`, plain
-  `official_dfr_val_tr` reached about `0.931` test WGA, slightly above the
-  literature DFR reference `0.929`. This closes the earlier protocol gap: the
-  benchmark problem is no longer “why is local DFR below reported DFR,” but
-  “which mechanism can reliably beat the official local comparator.”
-- The official comparator audit found one meaningful protocol update. Raising
-  `official_dfr_num_retrains` from `20` to `50` increased paired test WGA on
-  seeds `101`-`103` from about `0.9315` to about `0.9330`, with a consistent
-  paired delta of about `+0.0016`; adding train examples to DFR hurt, averaging
-  about `0.9232` test WGA. Treat `official_dfr_val_tr_retrains50` as the
-  stronger local comparator for future Track A promotion decisions, not as a
-  proposed-method win.
-- Official-feature mechanism transfer results are now mixed in a useful way:
-  single-seed `causal_dfr` reached about `0.939` test WGA on the official
-  feature table, but a seed-matched comparison over seeds `101`-`105` averaged
-  about `0.923` test WGA versus about `0.929` for plain `official_dfr_val_tr`.
-  Current `causal_dfr` therefore has upside but is not yet a stable win over
-  the official comparator.
-- Track A now has a paired official-feature causal DFR runner,
-  `scripts/run_waterbirds_official_causal_dfr_sweep.py`, that reports
-  same-seed official-baseline deltas and streams rows to CSV as each fit
-  completes. A seeds `101`-`103` smoke on the current causal DFR setting
-  reproduced the instability: mean test WGA about `0.9252`, mean paired delta
-  about `-0.0062`, and minimum paired delta about `-0.0140`. The interrupted
-  broader grid showed the same seed101-win/seed102-loss pattern before it was
-  stopped, so broad unpaired-looking causal DFR knob sweeps are not the next
-  best use of compute.
-- A new `official_causal_shrink_dfr_val_tr` method is implemented as a
-  conservative official-protocol extension: it uses the same validation split,
-  C-grid, balanced validation subsampling, and retrain averaging as
-  `official_dfr_val_tr`, but can shrink nuisance dimensions after
-  standardization before the L1 head fit. Shrink `1.0` exactly recovers the
-  official DFR path, and run artifacts now persist `model_details` such as the
-  selected C and shrink value. The first paired three-seed smoke is negative:
-  on seeds `101`-`103`, causal-shrink DFR reached mean test WGA about
-  `0.9299`, mean paired delta about `-0.0016`, and zero non-negative seed
-  deltas versus the locked official comparator. It should not be promoted in
-  its current grid.
-- Softer causal-shrink grids do not yet clear the updated bar. A gentle hard
-  mask grid (`1.0,0.95,0.9,0.85,0.75`) averaged about `0.9315` WGA against the
-  20-retrain comparator, with paired deltas `+0.0016,0.0,-0.0016`; a soft-score
-  prior averaged about `0.9309`. Repeating the gentle hard-mask grid with
-  `official_dfr_num_retrains: 50` averaged about `0.9325` versus the stronger
-  `0.9330` comparator, with paired deltas `-0.0016,0.0,0.0`. Causal shrink
-  lowers nuisance-to-causal importance, but in these settings that diagnostic
-  gain is not a benchmark improvement.
-- Feature-swap `counterfactual_adversarial` remains non-competitive on the
-  official feature table. Plain official-feature transfer collapsed to about
-  `0.796` test WGA, a nuisance-zero ablation partially repaired it to about
-  `0.883`, and enlarging the causal mask did not rescue the method. This
-  strongly suggests the current random nuisance-swap construction is too
-  off-manifold for deep official Waterbirds features.
-- A new `official_representation_dfr` path is now implemented to test
-  representation learners against the exact official DFR downstream protocol.
-  The first swap-free adversarial representation probe underperformed:
-  `adversarial_probe` plus official DFR reached about `0.913` test WGA with
-  very poor selectivity (about `0.081`) and high nuisance-to-causal importance
-  (about `0.886`). After wiring fixed causal input gating into
-  `adversarial_probe`, a gated rerun improved diagnostics substantially
-  (selectivity about `0.314`, nuisance-to-causal importance about `0.170`) but
-  still fell to about `0.909` test WGA. The representation-level lesson so far
-  is that reducing nuisance reliance alone is not enough; the next mechanism
-  should preserve causal signal while suppressing nuisance, not just hard-mask
-  it.
-- Waterbirds benchmark status should now be read in three tiers:
-  - official baseline:
-    `official_dfr_val_tr_retrains50` on
-    `features_official_erm_official_repro.csv` at about `0.933` test WGA is the
-    stronger local comparator; the previous 20-retrain comparator at about
-    `0.931` remains useful for historical continuity only.
-  - promising but unstable:
-    official-feature `causal_dfr` and any single-seed mechanism variant that
-    beats the baseline but does not yet hold up under seed-matched averages.
-  - promoted:
-    only a candidate with seed-matched mean test WGA above the official
-    baseline and acceptable variance should be treated as a real improvement.
-- The repo now has three official Waterbirds search tracks:
-  - `scripts/run_waterbirds_official_causal_dfr_sweep.py` for seed-matched
-    official-feature causal DFR mask/nuisance sweeps with paired deltas.
-  - `scripts/run_waterbirds_official_representation_sweep.py` for seed-matched
-    official-feature mechanism sweeps with CSV/JSON summaries.
-  - `scripts/run_waterbirds_official_backbone_sweep.py` for official-aligned
-    backbone/feature-generation sweeps scored by plain official DFR.
-- Track B now has a provenance guardrail. Waterbirds feature manifests record
-  resolved ERM/backbone settings, and the official backbone sweep reports
-  `manifest_settings_status` plus `base_metric_status`. Rows with missing
-  settings or collapsed base ERM WGA are listed under `blocked_rows` and are
-  skipped before downstream official DFR scoring.
-- The existing broken Track B artifact
-  `features_official_e50_lr0.001_envadv0_seed101.csv` is now formally blocked
-  by this audit path: its cached manifest lacks resolved settings and its base
-  ERM WGA is `0.0` on train, validation, and test. The audit artifact is
-  `outputs/dfr_sweeps/official-backbone-audit-e50-envadv0-seed101-20260428.json`.
-- A fresh rerun of that same no-env-adv Track B candidate reproduced the
-  collapse with truthful settings: `manifest_settings_status=ok`, but
-  `base_metric_status=blocked_base_erm:train/worst_group_accuracy,val/worst_group_accuracy,test/worst_group_accuracy`.
-  The rerun artifact is
-  `outputs/dfr_sweeps/official-backbone-rerun-e50-envadv0-seed101-20260428.json`.
-  This means the blocker is now a live training/export issue, not merely stale
-  provenance. The local `auto` device path also emitted repeated Metal/MPS
-  command-buffer failures during the rerun, so the backbone sweep now defaults
-  to CPU unless `--device auto` is requested explicitly.
-- One concrete Track B training-path bug is fixed: official-style custom
-  schedules now choose the official train-time augmentation based on
-  `eval_transform_style="official"`, not on `erm_finetune_preset="official"`.
-  This matters because Track B needs custom epochs/LR/env-adv settings without
-  accidentally falling back to generic aggressive `RandomResizedCrop`.
-  `tests/test_prepare_waterbirds_features.py` covers this path.
-- Track B now has a cheap CPU diagnostic mode: `--limit <n>` on
-  `scripts/run_waterbirds_official_backbone_sweep.py` uses a stratified
-  split/group metadata slice and includes `_limit<n>` in feature/output tags so
-  debug artifacts cannot be confused with full benchmark features. Base ERM
-  manifests now also record per-group accuracies and predicted-label counts.
-  On 2026-04-29, the corrected CPU path behaved sensibly on a 48-row slice:
-  - e1 no-env-adv was undertrained and predicted mostly label 0
-    (`14/16`-`15/16` predictions), giving group 3 WGA `0.0`.
-  - e3 no-env-adv cleared the guardrail with base test WGA `0.75` and
-    downstream official DFR test WGA `0.75`.
-  Scaling the same corrected e3 recipe to limit96, limit192, and limit384 kept
-  the guardrail green but exposed undertraining/label-bias behavior: downstream
-  official DFR test WGA was `0.75`, `0.8125`, and `0.8125`, while the limit384
-  base validation WGA fell to `0.1875` with heavy label-0 prediction bias.
-  Increasing only epochs at limit384 was more informative: e5 improved base
-  test/validation WGA to `0.84375`/`0.71875` and downstream official DFR test
-  WGA to `0.84375`; e10 improved base test/validation WGA further to
-  `0.9375`/`0.8125` but downstream official DFR fell back to `0.8125`. These
-  diagnostics argue against a basic label/index/export bug and point to e5
-  limit384 as the current Track B promotion candidate for a scheduled full CPU
-  seed101 run. Limited artifacts remain diagnostics only and must not be used
-  for benchmark claims.
-- Full Track B CPU runs now emit JSON progress from the ERM fine-tuning loop
-  and save a sidecar epoch checkpoint at
-  `data/waterbirds/<features>.csv.training.pt` while training. A successful
-  feature export removes the checkpoint after the manifest is written. This is
-  an operational guardrail for long no-limit runs, not a change to the training
-  objective or benchmark protocol.
-- The first no-limit Track B CPU promotion candidate completed cleanly but did
-  not beat the locked official comparator. Using e5, LR `0.001`, no env-adv,
-  seed `101`, and CPU, the manifest cleared both guardrails
-  (`manifest_settings_status=ok`, `base_metric_status=ok`) with base ERM test
-  WGA `0.7757009267807007` and validation WGA `0.7142857313156128`. Plain
-  downstream `official_dfr_val_tr` reached test WGA `0.914330244064331` and
-  test accuracy `0.9295822978019714`, below the locked comparator test WGA
-  `0.9314641952514648`. The artifact is
-  `outputs/dfr_sweeps/official-backbone-cpu-rerun-e5-envadv0-seed101-20260429.json`.
-  Do not promote this setting or run a seed sweep for it; the next Track B
-  branch should change one mechanism axis at a time, starting with
-  group-balanced backbone training.
-- The first group-balanced Track B follow-up was negative on the same diagnostic
-  slice that selected e5. The runner now includes `_gb` in group-balanced
-  feature tags so balanced and non-balanced artifacts cannot collide. With e5,
-  LR `0.001`, no env-adv, seed `101`, and `--limit 384 --balance-groups`, the
-  artifact cleared guardrails but had base validation/test WGA `0.5`/`0.78125`
-  and downstream official DFR test WGA `0.8125`, below the earlier no-balance
-  e5 limit384 diagnostic `0.84375`. Do not launch a full group-balanced e5 run
-  from this evidence; the next Track B mechanism-axis diagnostic should be a
-  small env-adv probe.
-- The first env-adv Track B follow-up was also negative on limit384. With e5,
-  LR `0.001`, env-adv `0.05`, seed `101`, and no group balancing, the artifact
-  cleared guardrails and improved base test WGA to `0.875`, but base validation
-  WGA was only `0.53125` and downstream official DFR test WGA fell to `0.75`.
-  This is the wrong tradeoff for the current promotion goal; do not launch a
-  full env-adv `0.05` e5 run from this evidence.
-- The Track B runner now supports frozen alternate torch-hub and Hugging Face
-  vision backbones with explicit weights/eval-transform tags, while keeping ERM
-  fine-tuning limited to the ResNet path. Available stronger-source diagnostics
-  were negative on the limit384 slice when scored by the stronger
-  `official_dfr_val_tr_retrains50` comparator: frozen ResNet50 ImageNet-V2
-  features with weights transforms reached downstream WGA `0.84375`, frozen
-  ConvNeXt-Tiny ImageNet-V1 features reached `0.8125`, frozen CLIP ViT-B/32
-  features reached `0.625`, and frozen DINOv2-small features reached `0.84375`.
-  Do not scale these frozen sources to full benchmark runs. The local Hugging
-  Face cache currently only has `facebook/dinov2-small` and
-  `openai/clip-vit-base-patch32` among the checked vision families, so there is
-  no fresh stronger local HF feature source to screen without downloading new
-  weights.
-- A stricter training sanity check confirms the Track B ResNet path can train
-  properly when the LR is less aggressive, but this still does not create a
-  downstream win. On the limit384 diagnostic slice, e20/LR `0.0003` completed
-  all 20 epochs with mean train loss falling to about `0.211`; the checkpointed
-  base classifier reached train/test WGA `0.9375`/`0.9375` with balanced label
-  predictions. Exporting penultimate features from that checkpoint and scoring
-  with `official_dfr_val_tr_retrains50` reached only test WGA `0.8125` and test
-  accuracy `0.8359375`. So the current failure is not simply that the model did
-  not train; the trained representation is not helping the DFR head on the
-  diagnostic slice. The full no-limit e20/LR `0.0003` CPU run was stopped after
-  one completed epoch because it was too slow for an interactive local probe;
-  use checkpointed/resumable scheduled runs for any future full-data training.
-- Track B now supports staged ERM fine-tune sampling through
-  `erm_finetune_sample_warmup_epochs`: the feature-prep trainer can start with
-  natural sampling and switch to the requested sample mode after a fixed number
-  of epochs, with the setting recorded in manifests and sweep tags. The first
-  staged conflict screen was negative despite a strong base classifier. With
-  e5/LR `0.001`, conflict weight `3.0`, sample warmup `2`, seed `101`, and
-  limit384, base ERM reached test WGA `0.9375` but downstream official DFR
-  reached only test WGA `0.8125`. This is below the old e5 no-conflict
-  limit384 anchor (`0.84375`), so do not launch a full run for this staged
-  conflict recipe.
-- Track B now also supports opt-in cross-environment supervised contrastive
-  fine-tuning through `erm_finetune_contrastive_weight`,
-  `erm_finetune_contrastive_temperature`, and
-  `erm_finetune_contrastive_hard_negative_weight`. Positive pairs are same
-  bird label across different backgrounds; same-background/different-label
-  examples are available as hard negatives. The feature-prep path now also
-  records and applies `erm_finetune_seed`, and the official backbone sweep
-  passes its seed into image fine-tuning so feature-generation screens are
-  reproducible rather than only DFR-seeded. Seeded limit384 diagnostics with
-  e5/LR `0.001`, no env-adv, and seed `101` did not improve downstream DFR:
-  the seeded no-contrastive control, contrastive `w=0.05,t=0.2`, and stronger
-  `w=0.2,t=0.15` all reached official DFR test WGA `0.71875`. Feature matrices
-  did move (`L2` deltas about `1.76` and `9.32` versus control), but the DFR
-  decision surface did not improve. Do not launch full runs for these global
-  supervised-contrastive recipes; the next representation step should add
-  localization/component structure rather than only global label contrast.
-- Track B now supports lightweight decomposed feature export. The
-  `center_background` mode concatenates full-image features, center-crop
-  features, averaged corner-background features, and their center-minus-
-  background difference. A frozen Hugging Face `hf_patch_components` backbone
-  mode also pools ViT/DINO patch tokens into CLS, center-patch,
-  corner-background, and center-minus-background components from a single full
-  image. Limit384 diagnostics gave the first positive local signal from this
-  branch: seeded e5 ResNet features improved downstream official DFR from the
-  seeded control `0.71875` to `0.78125`; frozen DINOv2-small crop decomposition
-  and DINO patch components both reached `0.875` test WGA. However, the first
-  no-limit DINO patch-component run with `official_dfr_val_tr_retrains50`
-  reached only `0.9112149477005005` test WGA, below the locked official
-  comparator around `0.9330`. The full crop-decomposed DINO export was stopped
-  after a long no-output run and should be revisited only with a more efficient
-  extraction path. Treat DINO decomposition as mechanistically promising on the
-  diagnostic slice but not yet a benchmark improvement.
-- Component-aware DINO/HF feature export remains available through the
-  Waterbirds feature-prep path, including `feature_cls_*`,
-  `feature_foreground_*`, `feature_background_*`, and
-  `feature_foreground_minus_background_*` groups. The active latent patch-probe
-  stack built on top of those components was pruned after repeated dead ends:
-  it improved counterfactual logit-drop diagnostics but did not produce a
-  seed-stable downstream WGA lift, and the only compact feature-table bump was a
-  one-example/C-grid artifact. See `docs/failed-attempts.md` for the preserved
-  lesson; do not restart from that patch-probe runner as a next anchor.
-- The first new Track A configs are:
-  - `waterbirds_features_official_adv_representation_dfr_score_gate`
-  - `waterbirds_features_official_adv_representation_dfr_nuisance_regularized`
-  These use the same official feature table and downstream DFR protocol as the
-  baseline, but swap in soft score-guided gating or explicit nuisance
-  regularization during representation learning.
-- The markdown research report now separates blocked real benchmark configs,
-  real literature-comparable runs, and literature-aligned fixture runs. The
-  current Waterbirds fixture gets a development-only per-method delta table
-  against the published references.
-- Waterbirds gate mechanism status:
-  - fixed gated discovery top-128 remains the best local gate result at test
-    WGA about 0.790.
-  - fixed instability-JTT plus discovery top-128 reached about 0.713 test WGA,
-    so its compact win did not survive promotion.
-  - grouped discovery top-128 reaches about 0.752 test WGA.
-  - grouped instability-JTT top-128 reaches about 0.785 test WGA and about
-    0.797 val WGA.
-  - grouped random top-128 reaches about 0.766 test WGA, so grouped discovery
-    does not beat a matched random-mask control, but grouped instability-JTT
-    now does.
-  - recent compact mechanism variants including conditioned, contextual,
-    representation-conditioned, disagreement-weighted, and instability-replay
-    grouped methods all failed to beat the plain grouped discovery compact
-    baseline.
-  - grouped instability-JTT is the first grouped mechanism variant that beat
-    the compact grouped discovery baseline and survived promotion to a full run.
-  - fixed instability-JTT is not the next anchor; grouped instability-JTT is
-    the current best follow-on mechanism after fixed discovery.
-  - a compact sweep around grouped instability-JTT found a stronger compact
-    setting at stage1 epochs 20, top fraction 0.15, upweight 3.0, but its full
-    promoted run fell to about 0.673 test WGA. Compact ranking is therefore not
-    sufficient to reorder the full-run leaderboard by itself.
-  - compact promotion should now require both compact test WGA and compact val
-    WGA to clear a threshold with only a small test-val gap; test-only compact
-    wins are not enough.
-  - a stability-penalized stage-1 score (`mean_minus_std`) was added as a
-    principled follow-up, but a compact sweep around that variant produced no
-    promotable candidates and stayed below the current grouped instability-JTT
-    compact baseline.
-  - a loss-weighted stage-1 score (`loss_weighted_mean`) improved on the
-    stability-penalized follow-up but still produced no promotable compact
-    candidates; its best compact promotion score was about 0.639, still below
-    the grouped instability-JTT compact bar.
-  - a counterfactual excess-loss stage-1 score
-    (`counterfactual_loss_increase_mean`) reached about 0.667 compact test WGA
-    but only about 0.647 compact val WGA, so it also failed promotion.
-  - a group-weighted counterfactual excess-loss stage-1 score
-    (`group_loss_weighted_counterfactual_loss_increase_mean`) slightly improved
-    compact test WGA to about 0.673 but fell to about 0.639 compact val WGA,
-    so it also failed promotion and did not improve promotion score.
-  - the stage-1 selector branch now looks exhausted locally; the next
-    principled step is to change the stage-2 objective itself, not keep adding
-    more selector-weighting variants.
+  because final classifiers are trained on validation groups.
+
+### Promotion Rule
+
+Promote a Waterbirds candidate only if it satisfies all of these:
+
+- It is seed-matched against the active official comparator.
+- Mean test WGA is above the comparator by more than noise.
+- Variance and minimum paired seed delta are acceptable.
+- It clears matched random/control baselines when masks or scores are involved.
+- The result uses real benchmark features and documented provenance, not only a
+  tiny fixture or limit-slice artifact.
+
+Single-seed wins, compact-only wins, and validation-selected wins are diagnostic
+signals, not research claims.
+
+## Active Tracks
+
+### Track A: Official-Feature Mechanisms
+
+Goal: beat the official DFR comparator without changing the base feature table.
+
+Current state:
+
+- Plain official DFR reproduction works locally and slightly exceeds the
+  literature reference, so the earlier protocol gap is closed.
+- `causal_dfr` has single-seed upside but fails seed-matched stability. A
+  seeds `101`-`103` smoke averaged about `0.9252` test WGA, with mean paired
+  delta about `-0.0062` against the official baseline.
+- `official_causal_shrink_dfr_val_tr` is implemented and exactly recovers
+  official DFR at shrink `1.0`, but gentle hard/soft shrink grids did not beat
+  the 50-retrain comparator.
+- Feature-swap `counterfactual_adversarial` is non-competitive on official
+  features. The swap construction appears too off-manifold for deep Waterbirds
+  representations.
+- `official_representation_dfr` is implemented. Current adversarial/gated
+  representation probes improve diagnostics such as nuisance-to-causal
+  importance, but still underperform test WGA.
+
+Decision:
+
+- Do not spend more compute on broad unpaired `causal_dfr` or shrink grids.
+- Any next Track A run should change the mechanism qualitatively and report
+  paired deltas against `official_dfr_val_tr_retrains50`.
+
+### Track B: Feature Generation and Representation Source
+
+Goal: improve the representation before the unchanged official DFR head.
+
+Current state:
+
+- The official backbone sweep has provenance guardrails. Feature manifests must
+  record resolved ERM/backbone settings, and rows with missing settings or
+  collapsed base ERM WGA are blocked before DFR scoring.
+- The prior broken Track B feature artifact is formally blocked: one cached
+  artifact lacked resolved settings, and a fresh no-env-adv rerun reproduced a
+  real base-ERM collapse.
+- CPU is now the default for backbone sweeps unless `--device auto` is
+  requested, because local MPS/Metal failures occurred during long reruns.
+- The first no-limit CPU candidate, e5/LR `0.001`/no-env-adv/seed `101`,
+  cleared guardrails but reached only about `0.9143` downstream official DFR
+  test WGA. Do not seed-sweep or promote it.
+- Limit384 follow-ups with group balancing, env-adv, staged conflict sampling,
+  and global supervised contrastive objectives were negative. Several improved
+  base ERM WGA while worsening downstream DFR WGA, so base classifier strength
+  alone is not the right selection signal.
+- Frozen stronger-source diagnostics were negative on limit384: ResNet50-V2,
+  ConvNeXt-Tiny, CLIP ViT-B/32, and DINOv2-small did not justify full runs.
+- Component/decomposed feature export is available. DINO patch/crop components
+  looked promising on limit384 but failed to beat the comparator in the first
+  no-limit patch-component run.
+
+Decision:
+
+- Do not launch full runs for the exact failed e5, group-balanced e5, env-adv
+  e5, staged conflict, global contrastive, or frozen-source settings.
+- Future Track B work needs a more structured representation intervention than
+  global sampling/contrast alone. If revisiting DINO decomposition, first make
+  extraction efficient and checkpointed enough for full-data runs.
+
+### LLM-Guided Clue Bridge
+
+Goal: use a local/replayable planner to propose causal explanations and cheap
+feature-level tests, then train a bridge that predicts which probes are worth
+running or trusting.
+
+Current implementation:
+
+- `causality_experiments.latent_clue_packets` converts feature/probe evidence
+  into stable latent clue packets.
+- `causality_experiments.llm_clue_planner` provides a JSON-constrained mock
+  planner over a fixed action catalog.
+- `causality_experiments.counterfactual_clue_tests` executes deterministic
+  ablation, shrink, donor-swap, and conditional-signal checks with matched
+  random-feature controls.
+- `causality_experiments.llm_clue_bridge` turns packet/plan/result traces into
+  training targets: `hypothesis_label`, `test_value`, and `score_delta`.
+- `scripts/run_llm_counterfactual_clue_probe.py` writes replayable packets,
+  hypotheses, test specs, measured test results, tested clue rows, bridge
+  traces, and baseline comparison artifacts.
+
+Fixture comparison:
+
+- Across all eight lightweight fixtures, `llm_tested` top-1 known causal-target
+  recovery averaged `0.625`, versus `1.000` for the stats baseline and `0.000`
+  for deterministic random.
+- At top-2, `llm_tested` averaged `0.3125`, versus `0.6875` for stats and
+  `0.125` for random.
+- Interpretation: the tested loop is extracting non-random information, but the
+  simple stats baseline is stronger. Misses concentrate on factor/sequence
+  fixtures where observed effects or correlations can be shortcut/artifact
+  clues rather than latent causes.
+
+Decision:
+
+- Treat these misses as bridge-training data, not as a reason to hard-code the
+  mock planner toward fixture ground truth.
+- Next implementation layer: add a replay backend, train/evaluate a small
+  ranker or contextual bandit on packet/plan/result traces, and hold out
+  fixture families to test generalization.
+- Do not make Waterbirds downstream claims from LLM-tested clues until the
+  bridge beats stats/random controls under held-out evaluation.
+
+### Clue Fusion and Discovery Masks
+
+Current state:
+
+- The clue-fusion bridge creates feature cards, deterministic language clues,
+  image/prototype activation clues, stats/language/image/fused score CSVs, and
+  source ablation reports.
+- On official Waterbirds repro features, language clues provide non-neutral weak
+  evidence from activation alignment rather than feature names. Language-only
+  top-k sets differ from stats-only sets, and fused scores inject label-aligned
+  confidence while preserving some statistical margin.
+- Existing downstream consumers have not produced a stable Waterbirds win.
+  Soft-score official shrink almost tied the comparator but did not clear the
+  promotion gate, and stronger `causal_dfr` soft-score objectives failed paired
+  seed checks.
+- `dfr_num_retrains` makes soft-score ensembles more stable, but not stronger
+  than official DFR.
+
+Decision:
+
+- Keep clue fusion as a diagnostic and as supervision for the LLM bridge.
+- Do not promote score/mask consumers unless they beat matched stats/random and
+  official DFR controls under paired seed checks.
+
+### Gate Mechanisms
+
+Current state:
+
+- Fixed gated discovery top-128 remains the best local fixed-gate result at
+  about `0.790` test WGA.
+- Grouped instability-JTT is the best grouped follow-on mechanism, but compact
+  improvements did not reliably survive full promotion.
+- Recent selector variants, including stability-penalized, loss-weighted,
+  counterfactual excess-loss, and group-weighted counterfactual excess-loss,
+  did not produce promotable candidates.
+
+Decision:
+
+- Stop extending stage-1 selector weighting by default.
+- If returning to this family, change the stage-2 objective and clear matched
+  fixed/grouped random-mask controls before any claim.
+
+## Retired or Low-Priority Paths
+
+- The active latent patch-probe runner was pruned. It improved logit-drop
+  diagnostics but did not produce seed-stable downstream WGA, and the only
+  compact bump was a one-example/C-grid artifact. Preserve the lesson in
+  `docs/failed-attempts.md`; do not restart from that runner.
+- Fixed-feature DFR head tweaks, validation-threshold calibration, LBFGS
+  logistic DFR, exact balanced validation subsampling, and train-feature
+  standardization did not close the Waterbirds gap.
+- Layer4-only ERM feature ladders, plain full-backbone SGD plus augmentation,
+  and small group-weight/sample-weight variations did not produce a promotable
+  feature source.
+- Generic adversarial hiding remains too blunt for sequence fixtures; any
+  sequence work should be factor/token-specific.
 
 ## Near-Term Plan
 
-### Latest Clue-Fusion Status
+1. Build the trainable clue bridge.
+   - Add a replay backend for planner outputs.
+   - Train a small ranker/contextual bandit over latent packets, proposed
+     actions, and measured test results.
+   - Evaluate against stats and deterministic random on held-out fixture
+     families before touching Waterbirds downstream consumers.
 
-- The clue-fusion bridge now creates feature cards, deterministic language
-  clues, image/prototype activation clues, stats/language/image/fused score
-  CSVs, and source ablation reports. The main entrypoint is
-  `scripts/run_waterbirds_clue_fusion_sweep.py`; source-ablation-only reports
-  are available through `scripts/report_clue_source_ablation.py`.
-- The first LLM-guided clue-probe implementation slice is now in place. It does
-  not call hosted models and does not revive the pruned patch-probe stack:
-  `causality_experiments.latent_clue_packets` converts feature/probe evidence
-  into stable latent clue packets, `causality_experiments.llm_clue_planner`
-  provides a JSON-constrained mock planner over a fixed test-action catalog,
-  `causality_experiments.counterfactual_clue_tests` executes deterministic
-  feature-level ablation/shrink/donor-swap/conditional-signal checks with
-  matched random-feature controls, and `causality_experiments.llm_clue_bridge`
-  turns packet/plan/result traces into initial training targets
-  (`hypothesis_label`, `test_value`, and `score_delta`). The fixture-safe CLI entrypoint is
-  `scripts/run_llm_counterfactual_clue_probe.py --llm-backend mock`, which
-  writes replayable packets, hypotheses, test specs, measured test results,
-  tested clue rows, and training traces. Real LLM/replay backends and a held-out
-  bridge-ranker evaluator are the next implementation layer before any
-  Waterbirds downstream claim.
-- First fixture comparison for the LLM-tested bridge is complete. Across all
-  eight lightweight fixture configs, `llm_tested` top-1 known causal-target
-  recovery averaged `0.625`, versus `1.000` for the stats baseline and `0.000`
-  for deterministic random; top-2 averaged `0.3125`, versus `0.6875` stats and
-  `0.125` random. This means the current mock-tested loop is extracting
-  non-random information, but the simple stats baseline is still stronger. The
-  misses concentrate on factor/sequence fixtures where high observed effects or
-  correlations can be shortcut/artifact clues rather than latent causes, making
-  them good bridge-ranker training data.
-- On official Waterbirds repro features, deterministic language clues now
-  provide non-neutral weak evidence from activation alignment rather than
-  feature names. Language-only top-k sets differ substantially from stats-only
-  sets, and fused scores preserve some statistical margin while injecting
-  label-alignment confidence.
-- Current downstream status: plain `official_dfr_val_tr` is not a valid
-  consumer because it ignores masks/scores; soft-score
-  `official_causal_shrink_dfr_val_tr` consumes them but stayed below the active
-  comparator. The stronger `causal_dfr` soft-score objective reached about
-  `0.9401` single-seed test WGA, but a paired 3-seed check did not survive:
-  fused top-64 averaged about `0.9058` test WGA versus the official DFR
-  baseline at about `0.9315`.
-- `scripts/run_waterbirds_clue_seed_stability.py` now runs paired baseline and
-  clue-source candidates over matched seeds. Use it before any promotion claim.
-  The clue ablation remains useful, but downstream stats/language/image/fused
-  support is not yet seed-stable enough to promote.
-- The data adapter now supports
-  `dataset.discovery_score_soft_selection: selected` to prune soft scores
-  outside a selected discovery-score support. The first pruned diagnostic
-  separated candidates slightly, but reduced WGA relative to the full-score
-  soft prior.
-- `dfr_num_retrains` now enables weight-averaged DFR/causal-DFR heads. The
-  3-retrain soft-score ensemble was much more stable than raw Adam
-  (`~0.0057` test-WGA std for fused top-64), but averaged only about `0.9216`
-  test WGA, below the official DFR baseline. Treat it as a diagnostic stability
-  tool, not a promotion candidate.
-- `configs/benchmarks/waterbirds_features_official_clue_shrink_dfr_val_tr.yaml`
-  moves the fused clue prior into the official DFR feature-scaling hook. The
-  first paired fused top-64 pruned screen averaged about `0.9311` test WGA
-  versus the official DFR baseline at about `0.9315`; seeds 101 and 103 won
-  slightly, seed 102 lost, and the promotion gate failed. This is a useful
-  integration diagnostic, but the delta is now clearly too small to be the main
-  route toward a meaningful `1`-`2` point improvement.
-- The next implementation track is upstream representation/data intervention
-  before official DFR. `scripts/prepare_waterbirds_features.py` now supports
-  named ERM fine-tune sample modes, including `conflict_upweight` and
-  `group_balanced_conflict_upweight`, and
-  `scripts/run_waterbirds_official_backbone_sweep.py` can tag/cache/audit those
-  feature artifacts through `--sample-modes` and `--minority-weight`. Use this
-  to test background-conflict/minority upweighting at the backbone feature
-  stage, then evaluate with the unchanged official DFR head.
-- First limit384 conflict-sampling screen was not promotable. Conflict-only e3
-  at weight `3.0` reached downstream official DFR test WGA `0.84375`, above the
-  old e3 limit384 no-conflict result (`0.8125`) but tying the old e5 limit384
-  anchor. Conflict-only e5 fell to `0.75`; lighter e3 conflict weight `1.5`
-  fell to `0.8125`; and grouped-conflict weight `3.0` collapsed at base ERM for
-  e3 (`0.0` test WGA). Do not spend full-run compute on these exact settings.
+2. Keep Track A honest.
+   - Use `official_dfr_val_tr_retrains50` as the paired comparator.
+   - Run only mechanism changes that are qualitatively different from the
+     exhausted causal-DFR/shrink/swap grids.
+   - Report mean paired delta, minimum paired delta, and variance.
 
-1. Get a real Waterbirds-compatible feature run.
-   - Use local features, real splits, labels, and group/background metadata.
-   - Compare WGA against literature references in `docs/literature-context.md`.
-   - If the feature table has known bird-specific feature columns, set
-     `dataset.causal_feature_columns` or `dataset.causal_feature_prefixes` so
-     counterfactual methods can run honestly.
-2. Stabilize and improve the DFR anchor.
-   - Use `scripts/run_dfr_sweep.py` for narrow, predeclared DFR sweeps and CSV
-     outputs under `outputs/dfr_sweeps/`.
-   - Treat tuned `dfr` and `causal_dfr` as the immediate comparators for any
-     Waterbirds improvement claim.
-   - Promote only seed-stable improvements over the `0.897`/`0.900` tuned
-     anchors; single-run ties or tiny lifts should remain diagnostic.
-   - Do not select by DFR validation WGA, since validation groups are used for
-     retraining.
-   - The current evidence points away from final-head tweaks on the fixed
-     feature table, away from layer4-only ERM feature ladders, away from plain
-     full-backbone SGD plus augmentation at LR `0.001` or `0.0001`, and now
-     away from no-limit Track B e5/no-env-adv at LR `0.001`. That full CPU
-     seed101 run cleared guardrails but reached only `0.914330244064331`
-    downstream official DFR test WGA, below the locked official comparator
-    `0.9314641952514648`. The first group-balanced and env-adv e5 limit384
-    diagnostics were also negative (`0.8125` and `0.75` downstream WGA), so
-    full runs for those exact settings are not justified. The remaining
-    plausible gap is likely a different backbone-training recipe, a different
-    validation-feature source, or a stronger backbone, not another small DFR
-    objective variant or a seed sweep of the failed e5 variants.
-   - Do not promote the ERM-layer4 e1/e3/e5, SGD-augmentation layer4 e3,
-     full-backbone SGD-augmentation LR `0.001`/`0.0001`, or group-balanced
-     full-backbone SGD-augmentation LR `0.0001` feature tables as improvements;
-     they were diagnostic but remained below the fixed-feature tuned anchor.
-   - For future whole-point improvements, prioritize feature generation and
-     training distribution changes before DFR. The first live implementation is
-     conflict/minority sampling during backbone ERM fine-tuning; screen it with
-     small limits before any no-limit full feature extraction. The initial
-     conflict-only/grouped-conflict limit384 screen failed to beat the existing
-     e5 limit anchor, and the staged e5 conflict screen improved base ERM while
-     still falling to `0.8125` downstream official DFR. The next upstream
-     attempt should change the representation mechanism more substantially than
-     conflict-example sampling weight or a simple on/off schedule.
-3. Compose the strongest local mechanisms.
-   - Future mechanism changes should be screened first against the matched
-     fixed/grouped random-mask controls, not just against earlier discovery
-     variants.
-   - Use the stricter compact promotion rule before any full-budget promotion:
-     clear compact test WGA, compact val WGA, and a small test-val gap.
-   - Use grouped instability-JTT as the new grouped-family comparator.
-   - Stage-1 signal changes should be judged by promotion score, not raw
-     compact test WGA, since both stable and loss-weighted follow-ups failed
-     promotion despite being mechanistically plausible.
-   - Stop extending the stage-1 selector family by default; the loss-delta and
-     group-loss-delta selectors also failed promotion, so the next mechanism
-     work should target the stage-2 counterfactual-adversarial objective.
-   - Counterfactual-adversarial improvements should still clear the current
-     fixed/grouped random controls before being promoted to full research
-     claims.
-4. Develop factor/token-specific probe interventions.
-   - Generic adversarial hiding is too blunt for sequence fixtures.
-   - Use known factor/token metadata to design targeted intervention losses.
-5. Use group-balanced ERM as a required comparator for any known-group result.
-6. For every serious result, compare against literature reference/SOTA numbers
-   and cite the source; update `docs/literature-context.md` as needed.
+3. Revisit representation generation only with structure.
+   - Avoid full runs for the failed global sampling/contrast recipes.
+   - If using component features again, make extraction efficient,
+     checkpointed, and provenance-audited first.
+   - Prefer interventions that preserve foreground/bird signal while reducing
+     background shortcut reliance.
+
+4. Keep benchmark reporting current.
+   - Compare serious Waterbirds rows against `docs/literature-context.md`.
+   - Keep `docs/research-log.md` updated after meaningful experiment rounds.
+   - Move failed or weak paths into `docs/failed-attempts.md` once the lesson is
+     clear.
 
 ## Current Risks
 
-- Fixture tasks are useful for harness iteration but are not substitutes for
-  real benchmark results.
-- Current sequence experiments are under-modeled.
-- IRM remains sensitive to penalty schedules and may need config sweeps per
-  dataset.
-- ATE proxy is a rough diagnostic, not a validated causal-effect estimator.
-- Sequence WGA improvements are promising but high-variance across seeds.
-- Some known-group baselines improve WGA by sacrificing average accuracy; reports
-  should continue showing both.
-- Fixture wins can be misleadingly high; compare to SOTA only on real benchmark
-  adapters with matching assumptions.
-- The local Waterbirds feature table now exists, but compact screening remains
-  an imperfect proxy for full-budget ordering; promotion decisions still need
-  explicit test/validation thresholds and follow-up full runs.
-- Strong matched random-mask controls remain a real risk to overclaiming; any
-  future mechanism win still needs to clear the current fixed/grouped random
-  baselines before it is treated as causal progress.
+- Fixture tasks can make weak mechanisms look strong; real benchmark adapters
+  remain the only route to literature claims.
+- Compact screens are useful but do not reliably order full-budget runs.
+- Strong matched random controls are still a major overclaiming risk for masks,
+  scores, and clue-derived feature selection.
+- Waterbirds DFR validation metrics are not unbiased holdout metrics.
+- Better base ERM WGA does not necessarily imply better downstream DFR WGA.
+- Current sequence experiments are under-modeled, and WGA improvements there
+  remain high variance across seeds.
 
 ## Log Hygiene
 
-- `docs/research-log.md` should track research progress and empirical signals.
-- `docs/failed-attempts.md` should track failed or weak research/modeling
-  attempts, not tooling friction.
-- `docs/current-state.md` should stay as a compact handoff: current capability,
-  next plan, risks, and active assumptions.
+- `docs/research-log.md`: chronological research progress and empirical
+  signals.
+- `docs/failed-attempts.md`: failed or weak research/modeling attempts and the
+  lesson to preserve.
+- `docs/current-state.md`: compact handoff, active assumptions, promotion bars,
+  next steps, and stop-rules.

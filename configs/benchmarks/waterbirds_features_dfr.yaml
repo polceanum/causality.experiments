@@ -1,3 +1,5 @@
+# Legacy local-feature DFR anchor. This config still runs, but the active
+# benchmark-facing comparator is waterbirds_features_official_dfr_val_tr_retrains50.
 name: waterbirds_features_dfr
 benchmark:
   kind: real

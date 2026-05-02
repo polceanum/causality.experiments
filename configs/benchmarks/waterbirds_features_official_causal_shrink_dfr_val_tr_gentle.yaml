@@ -14,7 +14,7 @@ benchmark:
 seed: 101
 dataset:
   kind: waterbirds_features
-  path: data/waterbirds/features_official_erm.csv
+  path: data/waterbirds/features_official_erm_official_repro.csv
   causal_mask_strategy: label_minus_env_correlation
   causal_mask_min_margin: 0.01
   causal_mask_top_k: 512

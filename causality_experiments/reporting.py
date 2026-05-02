@@ -83,7 +83,8 @@ def is_ad_hoc_config(
     include_waterbirds_tune: bool = True,
 ) -> bool:
     return (
-        "_seed" in config_name
+        config_name.startswith("tmp_")
+        or "_seed" in config_name
         or "_irm_w" in config_name
         or "_w0p" in config_name
         or "_w1p" in config_name

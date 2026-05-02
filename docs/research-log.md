@@ -897,3 +897,29 @@ signals. Keep this focused on what was tried and what was learned.
   cause. Those misses are useful training examples for the bridge ranker: it
   needs to learn when a tested feature effect is shortcut/artifact evidence
   rather than causal support.
+
+## 2026-05-02: Waterbirds DFR Config Health Check
+
+- Audited the active Waterbirds DFR configs after the handoff cleanup. The
+  legacy `waterbirds_features_dfr` config still loads and runs on
+  `data/waterbirds/features.csv`, reaching test WGA `0.8971962332725525` and
+  test accuracy `0.9193993806838989` on the local rerun. This is healthy as a
+  historical anchor but not competitive with the official comparator.
+- Fixed stale official config paths: the `waterbirds_features_official_*`
+  benchmark configs now point at the actual local feature table
+  `data/waterbirds/features_official_erm_official_repro.csv` rather than the
+  missing `data/waterbirds/features_official_erm.csv`.
+- Reran the official DFR configs after the path fix. The 20-retrain
+  `official_dfr_val_tr` config reached test WGA `0.9314641952514648` and test
+  accuracy `0.945978581905365`; the stronger 50-retrain comparator reached
+  test WGA `0.9330217838287354` and test accuracy `0.9466689825057983`.
+- Regenerated the benchmark-alignment report after filtering temporary
+  `tmp_*` recheck configs out of benchmark-ready rows. The strongest real
+  comparable Waterbirds row is now the official 50-retrain DFR comparator at
+  formatted WGA `0.933`, versus the currently recorded literature SOTA/reference
+  WGA `0.929`, for a formatted delta of `+0.004`.
+- Interpretation: the Waterbirds DFR stack is working, but the benchmark-facing
+  path is the official 50-retrain comparator. The open legacy DFR config should
+  not be used as the promotion bar. This validates the official reproduction
+  against the recorded reference, but it is a comparator/baseline result, not a
+  new proposed-method win.

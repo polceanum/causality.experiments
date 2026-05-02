@@ -222,6 +222,7 @@ def test_alignment_suffix_parsing_keeps_causal_dfr_distinct() -> None:
 
 
 def test_report_ad_hoc_filter_can_preserve_script_scope() -> None:
+    assert is_ad_hoc_config("tmp_causal_recheck") is True
     assert is_ad_hoc_config("waterbirds_features_dfr_seed101") is True
     assert is_ad_hoc_config("sweep_waterbirds_dfr") is True
     assert is_ad_hoc_config("waterbirds_tune_dfr") is True
