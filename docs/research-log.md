@@ -139,6 +139,32 @@ signals. Keep this focused on what was tried and what was learned.
   should be artifact-risk or active-boundary replacement, not more fixed core
   fractions.
 
+## 2026-05-03: Artifact-Risk Boundary Head
+
+- Added an opt-in artifact-risk scorer to
+  `scripts/run_waterbirds_bridge_fused_sweep.py`. The scorer trains a small
+  ridge head from replayed fixture traces, using shortcut geometry plus failed
+  control, wrong-hypothesis, weak-delta, and low-test-value signals as the risk
+  target. It writes risk-aware score files as either `artifact_risk` or
+  `artifact_risk_boundary`, where the boundary variant only penalizes features
+  around the active top-k cutoff.
+- Added focused tests for sweep integration, boundary-only replacement, and a
+  nonzero trained-risk baseline. The implementation keeps the ridge intercept
+  active during standardization; an early version centered the intercept away
+  and collapsed Waterbirds risk predictions to zero.
+- Support diagnostics on the refreshed Waterbirds trace snapshot showed no
+  change to the incumbent `bridge_fused/w0.3/top512` support. Across risk
+  weights `0.25` through `2.0` and boundary windows from `0.15` through `0.5`,
+  the top-512 overlap with the incumbent remained `512/512`; overlap with stats
+  stayed `311/512` (`0.4362` Jaccard). The active support already has only five
+  `env_corr >= label_corr` features, so this risk head has no useful boundary
+  edits to make.
+- Interpretation: artifact-risk scoring is now useful instrumentation and a
+  guardrail, but it is not a margin widener for the current candidate. The next
+  bridge-supervision attempt should use pairwise/listwise ranking or a stronger
+  active-boundary test signal rather than spending downstream compute on these
+  first risk variants.
+
 ## 2026-04-22
 
 - Read the source document, which is a survey and experiment blueprint rather

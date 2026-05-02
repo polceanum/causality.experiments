@@ -11,9 +11,10 @@ from pathlib import Path
 import statistics
 import sys
 import tempfile
-from typing import Any
+from typing import Any, NamedTuple
 
 import yaml
+import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -105,6 +106,156 @@ def _normalise_score_map(rows: list[dict[str, str]]) -> dict[str, float]:
     if high - low < 1e-12:
         return {key: 0.0 for key in values}
     return {key: (value - low) / (high - low) for key, value in values.items()}
+
+
+RISK_FEATURE_COLUMNS = (
+    "label_corr",
+    "env_corr",
+    "corr_margin",
+    "abs_corr_margin",
+    "uncertainty",
+    "top_group_entropy",
+    "label_env_disentanglement",
+)
+
+
+class ArtifactRiskHead(NamedTuple):
+    weights: np.ndarray
+    mean: np.ndarray
+    scale: np.ndarray
+    train_trace_count: int
+
+
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def _dataset_name(run_dir: Path) -> str:
+    manifest_path = run_dir / "manifest.json"
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        config = str(manifest.get("config", ""))
+        if config:
+            return Path(config).stem
+        dataset = str(manifest.get("dataset", ""))
+        if dataset:
+            return dataset
+    return run_dir.name
+
+
+def _matches_any_dataset_name(dataset: str, patterns: list[str] | None) -> bool:
+    if not patterns:
+        return False
+    lowered = dataset.lower()
+    return any(pattern.strip().lower() in lowered for pattern in patterns if pattern.strip())
+
+
+def _risk_feature_vector(row: dict[str, Any]) -> list[float]:
+    label_corr = _safe_float(row, "label_corr")
+    env_corr = _safe_float(row, "env_corr")
+    corr_margin = _safe_float(row, "corr_margin")
+    values = [_safe_float(row, column) for column in RISK_FEATURE_COLUMNS]
+    values.extend(
+        [
+            label_corr - env_corr,
+            max(0.0, env_corr - label_corr),
+            1.0,
+        ]
+    )
+    return values
+
+
+def _risk_target(row: dict[str, Any]) -> float:
+    label_corr = _safe_float(row, "label_corr")
+    env_corr = _safe_float(row, "env_corr")
+    shortcut_excess = max(0.0, env_corr - label_corr)
+    geometry_risk = shortcut_excess / max(abs(label_corr) + abs(env_corr), 1e-6)
+    failed_control = 0.0 if bool(row.get("passed_control", False)) else 1.0
+    wrong_hypothesis = 0.0 if bool(row.get("hypothesis_correct", False)) else 1.0
+    weak_delta = 1.0 if _safe_float(row, "score_delta") <= 0.0 else 0.0
+    low_test_value = 1.0 if _safe_float(row, "test_value") <= 0.0 else 0.0
+    target = 0.40 * geometry_risk + 0.20 * failed_control + 0.15 * wrong_hypothesis + 0.15 * weak_delta + 0.10 * low_test_value
+    return min(max(target, 0.0), 1.0)
+
+
+def fit_artifact_risk_head(
+    input_dir: Path,
+    *,
+    alpha: float = 10.0,
+    exclude_datasets: list[str] | None = None,
+) -> ArtifactRiskHead:
+    run_dirs = sorted(path for path in input_dir.iterdir() if path.is_dir())
+    if not run_dirs:
+        raise ValueError(f"No run directories found under {input_dir}.")
+    traces: list[dict[str, Any]] = []
+    for run_dir in run_dirs:
+        dataset = _dataset_name(run_dir)
+        if _matches_any_dataset_name(dataset, exclude_datasets):
+            continue
+        traces.extend(_read_jsonl(run_dir / "training_traces.jsonl"))
+    if not traces:
+        raise ValueError(f"No artifact-risk training traces found under {input_dir}.")
+    x = np.asarray([_risk_feature_vector(row) for row in traces], dtype=np.float64)
+    y = np.asarray([_risk_target(row) for row in traces], dtype=np.float64)
+    mean = x.mean(axis=0)
+    scale = x.std(axis=0)
+    scale[scale < 1e-8] = 1.0
+    mean[-1] = 0.0
+    scale[-1] = 1.0
+    xz = (x - mean) / scale
+    penalty = float(alpha) * np.eye(xz.shape[1], dtype=np.float64)
+    penalty[-1, -1] = 0.0
+    weights = np.linalg.pinv(xz.T @ xz + penalty) @ xz.T @ y
+    return ArtifactRiskHead(weights=weights, mean=mean, scale=scale, train_trace_count=len(traces))
+
+
+def _predict_artifact_risk(row: dict[str, Any], risk_head: ArtifactRiskHead) -> float:
+    x = np.asarray(_risk_feature_vector(row), dtype=np.float64)
+    raw = float(((x - risk_head.mean) / risk_head.scale) @ risk_head.weights)
+    return min(max(raw, 0.0), 1.0)
+
+
+def build_artifact_risk_score_rows(
+    *,
+    clue_rows: list[dict[str, Any]],
+    candidate_rows: list[dict[str, str]],
+    risk_head: ArtifactRiskHead,
+    top_k: int,
+    risk_weight: float = 0.25,
+    boundary_fraction: float | None = None,
+) -> list[dict[str, str]]:
+    if top_k <= 0:
+        raise ValueError("top_k must be positive for artifact-risk scoring.")
+    clues_by_feature = {str(row.get("feature_name", "")): row for row in clue_rows}
+    base_norm = _normalise_score_map(candidate_rows)
+    names = [row["feature_name"] for row in candidate_rows]
+    ranked_names = sorted(names, key=lambda name: base_norm.get(name, 0.0), reverse=True)
+    if boundary_fraction is None:
+        boundary_names = set(names)
+        source = "artifact_risk"
+    else:
+        window = max(1, int(round(float(boundary_fraction) * top_k)))
+        low_rank = max(0, top_k - window)
+        high_rank = min(len(ranked_names), top_k + window)
+        boundary_names = set(ranked_names[low_rank:high_rank])
+        source = "artifact_risk_boundary"
+    rows: list[dict[str, str]] = []
+    for row in candidate_rows:
+        name = row["feature_name"]
+        clue = clues_by_feature.get(name, {})
+        risk = _predict_artifact_risk(clue, risk_head)
+        penalty = float(risk_weight) * risk if name in boundary_names else 0.0
+        score = base_norm.get(name, 0.0) - penalty
+        updated = dict(row)
+        updated["artifact_risk"] = f"{risk:.6f}"
+        updated["support_score"] = f"{score:.6f}"
+        updated["rank_score"] = f"{score:.6f}"
+        updated["score"] = f"{score:.6f}"
+        updated["score_source"] = source
+        rows.append(updated)
+    return rows
 
 
 def _is_env_dominant(clue: dict[str, Any]) -> bool:
@@ -207,10 +358,10 @@ def _is_constrained_support_variant(variant_key: str) -> bool:
         "constrained_support_loose",
         "constrained_support_bridge",
     }
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return 0.0
+
+
+def _is_artifact_risk_variant(variant_key: str) -> bool:
+    return variant_key in {"artifact_risk", "artifact_risk_boundary"}
 
 
 def build_support_variant_score_rows(
@@ -407,6 +558,7 @@ def run_bridge_fused_sweep(
     source = bridge_score_source.strip().lower()
     if source not in {"bridge_fused", "bridge_gated", "policy_fused", "policy_safe"}:
         raise ValueError("bridge_score_source must be 'bridge_fused', 'bridge_gated', 'policy_fused', or 'policy_safe'.")
+    risk_head: ArtifactRiskHead | None = None
     for weight in bridge_fused_weights:
         score_path = out_dir / f"scores_{source}_{_weight_label(weight)}.csv"
         if source in {"bridge_fused", "bridge_gated"}:
@@ -448,12 +600,38 @@ def run_bridge_fused_sweep(
                     "constrained_support_strict",
                     "constrained_support_loose",
                     "constrained_support_bridge",
+                    "artifact_risk",
+                    "artifact_risk_boundary",
                 }:
                     raise ValueError(
                         "support variants must be one of: env_filter, margin_gate, stats_fill, "
                         "soft_env_penalty, stats_anchor, score_sqrt, score_square, constrained_support, "
-                        "constrained_support_strict, constrained_support_loose, constrained_support_bridge."
+                        "constrained_support_strict, constrained_support_loose, constrained_support_bridge, "
+                        "artifact_risk, artifact_risk_boundary."
                     )
+                if _is_artifact_risk_variant(variant_key):
+                    if risk_head is None:
+                        risk_head = fit_artifact_risk_head(
+                            bridge_input_dir,
+                            alpha=bridge_alpha,
+                            exclude_datasets=bridge_exclude_datasets,
+                        )
+                    for top_k in top_k_values:
+                        boundary_fraction = 0.15 if variant_key == "artifact_risk_boundary" else None
+                        variant_path = out_dir / f"scores_{source}_{_weight_label(weight)}_{variant_key}_top{top_k}.csv"
+                        write_csv_rows(
+                            variant_path,
+                            build_artifact_risk_score_rows(
+                                clue_rows=clue_rows,
+                                candidate_rows=bridge_rows,
+                                risk_head=risk_head,
+                                top_k=top_k,
+                                risk_weight=0.25,
+                                boundary_fraction=boundary_fraction,
+                            ),
+                        )
+                        bridge_paths[(weight, variant_key, int(top_k))] = variant_path
+                    continue
                 if _is_constrained_support_variant(variant_key):
                     for top_k in top_k_values:
                         stats_core_fraction, env_dominant_cap = _constrained_variant_params(variant_key, int(top_k))
@@ -596,7 +774,7 @@ def run_bridge_fused_sweep(
             if source == "bridge_fused":
                 for variant in support_variants:
                     variant_key = variant.strip().lower()
-                    if _is_constrained_support_variant(variant_key):
+                    if _is_constrained_support_variant(variant_key) or _is_artifact_risk_variant(variant_key):
                         for top_k in top_k_values:
                             candidate_items.append(
                                 (

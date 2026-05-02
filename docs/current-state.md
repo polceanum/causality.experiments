@@ -292,6 +292,15 @@ Decision:
   exactly at mean test WGA `0.9352525771`, while stricter variants regressed
   and failed the best-random gate on one seed. Keep the optimizer as a harness
   for future artifact-risk/active-boundary ideas, not as a promoted candidate.
+- An artifact-risk head is now available as another opt-in `bridge_fused`
+  support-variant family: `artifact_risk` and `artifact_risk_boundary`. It
+  trains a tiny ridge risk model from replayed fixture traces, combines trace
+  failure signals with shortcut geometry, and can penalize either all scores or
+  only the active top-k boundary. On the current refreshed Waterbirds
+  `bridge_fused/w0.3/top512` support, the trained head does not change the
+  selected top-512 set even with larger penalties; the incumbent already has
+  very low artifact-risk under this signal. Treat this as instrumentation and a
+  stop-rule, not as a downstream promotion candidate.
 
 ### Clue Fusion and Discovery Masks
 
@@ -378,6 +387,9 @@ Decision:
    - Do not full-budget promote the current constrained-support variants. The
      loose variant simply recovers the incumbent compact result; stricter
      variants lose too much bridge support.
+   - Do not full-budget promote the first artifact-risk variants. They currently
+     leave the incumbent top-512 support unchanged; the next useful step is a
+     stronger boundary test signal or pairwise/listwise bridge supervision.
    - Do not re-add raw activation-gap fields directly without a versioned corpus
      and held-out win.
 

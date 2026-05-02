@@ -1,6 +1,7 @@
 from pathlib import Path
 import json
 
+import numpy as np
 import yaml
 
 from scripts import run_waterbirds_bridge_fused_sweep as sweep
@@ -106,7 +107,14 @@ def test_bridge_fused_sweep_reports_paired_deltas(tmp_path: Path, monkeypatch) -
         seeds=[101],
         top_k_values=[1],
         bridge_fused_weights=[0.2],
-        support_variants=["env_filter", "soft_env_penalty", "score_square", "constrained_support", "constrained_support_bridge"],
+        support_variants=[
+            "env_filter",
+            "soft_env_penalty",
+            "score_square",
+            "constrained_support",
+            "constrained_support_bridge",
+            "artifact_risk_boundary",
+        ],
         bridge_score_source="bridge_fused",
         bridge_alpha=10.0,
         bridge_exclude_datasets=[],
@@ -131,11 +139,13 @@ def test_bridge_fused_sweep_reports_paired_deltas(tmp_path: Path, monkeypatch) -
     assert "bridge_fused_w0p2_score_square_top1" in labels
     assert "bridge_fused_w0p2_constrained_support_top1" in labels
     assert "bridge_fused_w0p2_constrained_support_bridge_top1" in labels
+    assert "bridge_fused_w0p2_artifact_risk_boundary_top1" in labels
     assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_env_filter.csv").exists()
     assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_soft_env_penalty.csv").exists()
     assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_score_square.csv").exists()
     assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_constrained_support_top1.csv").exists()
     assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_constrained_support_bridge_top1.csv").exists()
+    assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_artifact_risk_boundary_top1.csv").exists()
     random_summary = summary["random_controls"][0]
     assert random_summary["label"] == "random_score_0_top1"
 
@@ -250,3 +260,67 @@ def test_constrained_support_preserves_stats_core_and_caps_env_risk() -> None:
     assert selected == ["stats_good", "bridge_good"]
     assert "env_risk" not in selected
     assert {row["score_source"] for row in rows} == {"constrained_support"}
+
+
+def test_artifact_risk_boundary_penalizes_near_cutoff_only() -> None:
+    clue_rows = [
+        {"feature_name": "core", "label_corr": "0.9", "env_corr": "0.1"},
+        {"feature_name": "env_boundary", "label_corr": "0.1", "env_corr": "0.9"},
+        {"feature_name": "safe_boundary", "label_corr": "0.8", "env_corr": "0.1"},
+        {"feature_name": "tail", "label_corr": "0.2", "env_corr": "0.1"},
+    ]
+    bridge_rows = [
+        {"feature_name": "core", "score": "1.0"},
+        {"feature_name": "env_boundary", "score": "0.9"},
+        {"feature_name": "safe_boundary", "score": "0.88"},
+        {"feature_name": "tail", "score": "0.1"},
+    ]
+    weights = np.zeros(10, dtype=np.float64)
+    weights[8] = 1.0
+    risk_head = sweep.ArtifactRiskHead(
+        weights=weights,
+        mean=np.zeros(10, dtype=np.float64),
+        scale=np.ones(10, dtype=np.float64),
+        train_trace_count=4,
+    )
+
+    rows = sweep.build_artifact_risk_score_rows(
+        clue_rows=clue_rows,
+        candidate_rows=bridge_rows,
+        risk_head=risk_head,
+        top_k=2,
+        risk_weight=0.25,
+        boundary_fraction=0.5,
+    )
+
+    by_feature = {row["feature_name"]: row for row in rows}
+    selected = [row["feature_name"] for row in sorted(rows, key=lambda row: float(row["score"]), reverse=True)[:2]]
+    assert selected == ["core", "safe_boundary"]
+    assert float(by_feature["core"]["score"]) == 1.0
+    assert float(by_feature["env_boundary"]["artifact_risk"]) > float(by_feature["safe_boundary"]["artifact_risk"])
+    assert {row["score_source"] for row in rows} == {"artifact_risk_boundary"}
+
+
+def test_artifact_risk_head_learns_nonzero_baseline(tmp_path: Path) -> None:
+    traces = tmp_path / "traces"
+    _write_bridge_trace(traces)
+    risk_head = sweep.fit_artifact_risk_head(traces, alpha=10.0, exclude_datasets=[])
+    rows = sweep.build_artifact_risk_score_rows(
+        clue_rows=[
+            {"feature_name": "feature_good", "label_corr": "0.9", "env_corr": "0.1", "corr_margin": "0.8"},
+            {"feature_name": "feature_bad", "label_corr": "0.1", "env_corr": "0.8", "corr_margin": "-0.7"},
+        ],
+        candidate_rows=[
+            {"feature_name": "feature_good", "score": "1.0"},
+            {"feature_name": "feature_bad", "score": "0.9"},
+        ],
+        risk_head=risk_head,
+        top_k=1,
+        risk_weight=0.25,
+        boundary_fraction=None,
+    )
+
+    by_feature = {row["feature_name"]: row for row in rows}
+    assert risk_head.train_trace_count == 2
+    assert float(by_feature["feature_bad"]["artifact_risk"]) > 0.0
+    assert float(by_feature["feature_bad"]["artifact_risk"]) > float(by_feature["feature_good"]["artifact_risk"])

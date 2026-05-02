@@ -230,6 +230,21 @@ issues unless they invalidate an experimental result.
     constraint is driven by a learned artifact-risk head or active boundary
     tests.
 
+- **First artifact-risk head as an immediate bridge margin widener**
+  - Attempt: train a small risk head from replayed fixture traces and use it to
+    penalize risky bridge-fused Waterbirds features globally or only near the
+    top-512 boundary.
+  - Result: after fixing intercept handling, the risk head produced nonzero
+    estimates, but it did not alter the current `bridge_fused/w0.3/top512`
+    support. Weight and boundary-window diagnostics kept `512/512` overlap with
+    the incumbent support.
+  - Interpretation: the incumbent already has very low env/artifact risk under
+    this signal, so the first risk head mostly confirms the support audit rather
+    than finding replacements.
+  - Action: keep artifact-risk scoring as a guardrail/instrumentation path, but
+    do not spend downstream benchmark budget on the current variants. Move to
+    pairwise/listwise supervision or stronger active-boundary tests.
+
 - **Activation-gap fields as bridge-ranker features**
   - Attempt: add activation label/environment gaps and alignment one-hot fields
     to bridge training rows and the ridge ranker, then refresh the offline
