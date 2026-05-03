@@ -315,6 +315,27 @@ signals. Keep this focused on what was tried and what was learned.
   useful version should learn pair acceptance from downstream paired outcomes or
   use a stronger validation-aware probe target.
 
+## 2026-05-03: Replacement Calibration Dataset Pivot
+
+- Added `scripts/build_waterbirds_replacement_calibration.py`, which joins a
+  candidate score file, a reference score file, clue metadata, and paired
+  downstream sweep rows into one calibration row. The row records support
+  overlap/change counts, entered/left feature correlation summaries, optional
+  paired-replacement accept/evict counts, and paired downstream deltas to
+  official DFR, stats, and the best deterministic random control.
+- Generated the first calibration table at
+  `outputs/dfr_sweeps/waterbirds-replacement-calibration.csv` across compact
+  support-filter, constrained-support, active-boundary, model-effect,
+  env-guard, and paired-replacement variants. This makes the empirical pattern
+  explicit: broad edits tend to regress, no-op or near-incumbent edits tie, and
+  compact-only small-edit wins are not reliable promotion evidence because hard
+  `env_filter`/`stats_fill` looked best in compact but failed the full gate.
+- Interpretation: stop adding local boundary tricks as candidate mechanisms.
+  The next principled mechanism should train or calibrate pair/support acceptors
+  from this outcome table, with full-promotion labels where available and a
+  conservative penalty for compact-only positives that have not survived the
+  five-seed 50-retrain gate.
+
 ## 2026-04-22
 
 - Read the source document, which is a survey and experiment blueprint rather

@@ -348,6 +348,17 @@ Decision:
   and ties the incumbent compact result exactly: mean WGA `0.9352525771`, all
   compact gates `2/2`. Keep the harness for future learned replacement targets,
   but do not promote it as-is.
+- `scripts/build_waterbirds_replacement_calibration.py` is now the preferred
+  bridge-iteration pivot. It joins score-file support changes with paired
+  downstream outcomes, producing a calibration table for learning or auditing
+  replacement decisions from actual Waterbirds results rather than hand-tuned
+  local proxy tricks. The first table at
+  `outputs/dfr_sweeps/waterbirds-replacement-calibration.csv` covers compact
+  support filters, constrained support, active-boundary variants, env-guard,
+  and paired replacement. Treat compact rows as training/evidence rows only:
+  `env_filter`/`stats_fill` look best in compact but already failed full
+  promotion, so future acceptors need full-gate labels or conservative
+  compact-to-full uncertainty penalties.
 
 ### Clue Fusion and Discovery Masks
 
