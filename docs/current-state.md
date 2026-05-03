@@ -311,6 +311,15 @@ Decision:
   the official causal-shrink consumer did not promote: `w0.1`, `w0.3`, and
   `w0.5` all trailed stats and the best random control on mean. Keep the
   pairwise scorer as supervision infrastructure, not as the active candidate.
+- An active-boundary retest variant is now available as an opt-in
+  `bridge_fused` support variant. It runs cheap `conditional_signal_check`
+  tests only around the active top-k cutoff, then reranks that local band. On
+  refreshed Waterbirds `w0.3/top512`, it changed `51/512` selected features and
+  reduced env-dominant selected features from `5` to `2`, but compact WGA
+  regressed: mean `0.9339246154` versus incumbent compact mean
+  `0.9352525771`, mean delta `-0.0001056790` to stats, and mean delta
+  `-0.0004410446` to the best random control. Keep it as boundary-test
+  instrumentation, not as a promoted candidate.
 
 ### Clue Fusion and Discovery Masks
 
@@ -403,6 +412,9 @@ Decision:
    - Do not full-budget promote the first pairwise bridge-fused variants. They
      improve held-out fixture diagnostics at wider supports, but compact
      Waterbirds screens fail the stats and best-random gates.
+   - Do not full-budget promote the first active-boundary variant. It makes real
+     support replacements and lowers env-dominant count, but the replacements
+     hurt compact downstream WGA.
    - Do not re-add raw activation-gap fields directly without a versioned corpus
      and held-out win.
 

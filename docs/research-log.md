@@ -193,6 +193,29 @@ signals. Keep this focused on what was tried and what was learned.
   benchmark-facing support. Keep it as infrastructure and move next to stronger
   active-boundary evidence or richer listwise/query grouping.
 
+## 2026-05-03: Active-Boundary Retesting
+
+- Added an opt-in `active_boundary` support variant to
+  `scripts/run_waterbirds_bridge_fused_sweep.py`. It identifies features around
+  the active top-k cutoff, runs cheap `conditional_signal_check` tests on that
+  local band, and reranks only the boundary with normalized evidence while
+  leaving the stable core alone.
+- Support diagnostics on refreshed Waterbirds `bridge_fused/w0.3/top512` showed
+  that this variant actually moves the support: `51/512` features changed,
+  overlap with the incumbent was `461/512` (`0.8188` Jaccard), and
+  env-dominant selected features dropped from `5` to `2`. Overlap with stats was
+  `308/512`, close to the incumbent's `311/512`.
+- Compact paired two-seed, five-retrain Waterbirds screen did not promote.
+  Incumbent compact mean WGA stayed `0.9352525771`. Active-boundary mean WGA was
+  `0.9339246154`, with mean delta `+0.0012246966` to official DFR,
+  `-0.0001056790` to stats, and `-0.0004410446` to the best deterministic
+  random control. It was non-negative on only `1/2` seeds against stats and the
+  best random control.
+- Interpretation: active boundary tests are now strong enough to alter support,
+  but this first conditional-signal-only evidence over-replaces useful bridge
+  features. Future boundary testing needs a better target, likely model-effect
+  tests or validation-loss-aware replacement scoring, before downstream budget.
+
 ## 2026-04-22
 
 - Read the source document, which is a survey and experiment blueprint rather

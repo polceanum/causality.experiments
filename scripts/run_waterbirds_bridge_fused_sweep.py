@@ -21,7 +21,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from causality_experiments.config import load_config
+from causality_experiments.counterfactual_clue_tests import execute_clue_test
 from causality_experiments.data import load_dataset
+from causality_experiments.llm_clue_planner import ClueTestSpec
 from causality_experiments.run import run_experiment
 from scripts.run_waterbirds_clue_fusion_sweep import (
     build_bridge_score_rows,
@@ -365,6 +367,80 @@ def _is_artifact_risk_variant(variant_key: str) -> bool:
     return variant_key in {"artifact_risk", "artifact_risk_boundary"}
 
 
+def build_active_boundary_score_rows(
+    *,
+    bundle: Any,
+    clue_rows: list[dict[str, Any]],
+    candidate_rows: list[dict[str, str]],
+    top_k: int,
+    boundary_fraction: float = 0.15,
+    evidence_weight: float = 0.25,
+    split_name: str = "train",
+) -> list[dict[str, str]]:
+    if top_k <= 0:
+        raise ValueError("top_k must be positive for active-boundary scoring.")
+    base_norm = _normalise_score_map(candidate_rows)
+    names = [row["feature_name"] for row in candidate_rows]
+    ranked_names = sorted(names, key=lambda name: base_norm.get(name, 0.0), reverse=True)
+    window = max(1, int(round(float(boundary_fraction) * top_k)))
+    low_rank = max(0, top_k - window)
+    high_rank = min(len(ranked_names), top_k + window)
+    boundary_names = set(ranked_names[low_rank:high_rank])
+    clues_by_feature = {str(row.get("feature_name", "")): row for row in clue_rows}
+    raw_evidence: dict[str, float] = {}
+    result_by_feature: dict[str, dict[str, Any]] = {}
+    for name in sorted(boundary_names):
+        clue = clues_by_feature.get(name, {})
+        spec = ClueTestSpec(
+            candidate_id=str(clue.get("candidate_id", name)),
+            feature_name=name,
+            action="conditional_signal_check",
+            expected_direction="positive",
+            control="next_feature",
+            cost=0.25,
+            reason_code="active_boundary_conditional_signal",
+            evidence_ids=(),
+        )
+        result = execute_clue_test(bundle, spec, packet=clue, model=None, split_name=split_name)
+        label_delta = _safe_float(result, "test_effect_label_delta")
+        env_delta = abs(_safe_float(result, "test_effect_env_delta"))
+        random_delta = abs(_safe_float(result, "test_random_control_delta"))
+        selectivity = _safe_float(result, "test_effect_selectivity")
+        evidence = label_delta + selectivity - env_delta - random_delta
+        raw_evidence[name] = evidence
+        result_by_feature[name] = result
+    if raw_evidence:
+        low = min(raw_evidence.values())
+        high = max(raw_evidence.values())
+        if high - low < 1e-12:
+            evidence_norm = {name: 0.5 for name in raw_evidence}
+        else:
+            evidence_norm = {name: (value - low) / (high - low) for name, value in raw_evidence.items()}
+    else:
+        evidence_norm = {}
+    rows: list[dict[str, str]] = []
+    for row in candidate_rows:
+        name = row["feature_name"]
+        adjustment = float(evidence_weight) * (evidence_norm.get(name, 0.5) - 0.5) if name in boundary_names else 0.0
+        score = base_norm.get(name, 0.0) + adjustment
+        result = result_by_feature.get(name, {})
+        updated = dict(row)
+        updated["active_boundary_evidence"] = f"{raw_evidence.get(name, 0.0):.6f}"
+        updated["active_boundary_label_delta"] = f"{_safe_float(result, 'test_effect_label_delta'):.6f}"
+        updated["active_boundary_env_delta"] = f"{_safe_float(result, 'test_effect_env_delta'):.6f}"
+        updated["active_boundary_random_delta"] = f"{_safe_float(result, 'test_random_control_delta'):.6f}"
+        updated["support_score"] = f"{score:.6f}"
+        updated["rank_score"] = f"{score:.6f}"
+        updated["score"] = f"{score:.6f}"
+        updated["score_source"] = "active_boundary"
+        rows.append(updated)
+    return rows
+
+
+def _is_active_boundary_variant(variant_key: str) -> bool:
+    return variant_key in {"active_boundary"}
+
+
 def build_support_variant_score_rows(
     *,
     clue_rows: list[dict[str, Any]],
@@ -615,13 +691,31 @@ def run_bridge_fused_sweep(
                     "constrained_support_bridge",
                     "artifact_risk",
                     "artifact_risk_boundary",
+                    "active_boundary",
                 }:
                     raise ValueError(
                         "support variants must be one of: env_filter, margin_gate, stats_fill, "
                         "soft_env_penalty, stats_anchor, score_sqrt, score_square, constrained_support, "
                         "constrained_support_strict, constrained_support_loose, constrained_support_bridge, "
-                        "artifact_risk, artifact_risk_boundary."
+                        "artifact_risk, artifact_risk_boundary, active_boundary."
                     )
+                if _is_active_boundary_variant(variant_key):
+                    for top_k in top_k_values:
+                        variant_path = out_dir / f"scores_{source}_{_weight_label(weight)}_{variant_key}_top{top_k}.csv"
+                        write_csv_rows(
+                            variant_path,
+                            build_active_boundary_score_rows(
+                                bundle=bundle,
+                                clue_rows=clue_rows,
+                                candidate_rows=bridge_rows,
+                                top_k=top_k,
+                                boundary_fraction=0.15,
+                                evidence_weight=0.25,
+                                split_name="train",
+                            ),
+                        )
+                        bridge_paths[(weight, variant_key, int(top_k))] = variant_path
+                    continue
                 if _is_artifact_risk_variant(variant_key):
                     if risk_head is None:
                         risk_head = fit_artifact_risk_head(
@@ -787,7 +881,11 @@ def run_bridge_fused_sweep(
             if source == "bridge_fused":
                 for variant in support_variants:
                     variant_key = variant.strip().lower()
-                    if _is_constrained_support_variant(variant_key) or _is_artifact_risk_variant(variant_key):
+                    if (
+                        _is_constrained_support_variant(variant_key)
+                        or _is_artifact_risk_variant(variant_key)
+                        or _is_active_boundary_variant(variant_key)
+                    ):
                         for top_k in top_k_values:
                             candidate_items.append(
                                 (

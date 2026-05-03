@@ -114,6 +114,7 @@ def test_bridge_fused_sweep_reports_paired_deltas(tmp_path: Path, monkeypatch) -
             "constrained_support",
             "constrained_support_bridge",
             "artifact_risk_boundary",
+            "active_boundary",
         ],
         bridge_score_source="bridge_fused",
         bridge_alpha=10.0,
@@ -140,12 +141,14 @@ def test_bridge_fused_sweep_reports_paired_deltas(tmp_path: Path, monkeypatch) -
     assert "bridge_fused_w0p2_constrained_support_top1" in labels
     assert "bridge_fused_w0p2_constrained_support_bridge_top1" in labels
     assert "bridge_fused_w0p2_artifact_risk_boundary_top1" in labels
+    assert "bridge_fused_w0p2_active_boundary_top1" in labels
     assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_env_filter.csv").exists()
     assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_soft_env_penalty.csv").exists()
     assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_score_square.csv").exists()
     assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_constrained_support_top1.csv").exists()
     assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_constrained_support_bridge_top1.csv").exists()
     assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_artifact_risk_boundary_top1.csv").exists()
+    assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_active_boundary_top1.csv").exists()
     random_summary = summary["random_controls"][0]
     assert random_summary["label"] == "random_score_0_top1"
 
@@ -387,3 +390,45 @@ def test_artifact_risk_head_learns_nonzero_baseline(tmp_path: Path) -> None:
     assert risk_head.train_trace_count == 2
     assert float(by_feature["feature_bad"]["artifact_risk"]) > 0.0
     assert float(by_feature["feature_bad"]["artifact_risk"]) > float(by_feature["feature_good"]["artifact_risk"])
+
+
+def test_active_boundary_retests_near_cutoff_only(monkeypatch) -> None:
+    candidate_rows = [
+        {"feature_name": "core", "score": "1.0"},
+        {"feature_name": "weak_boundary", "score": "0.90"},
+        {"feature_name": "strong_boundary", "score": "0.89"},
+        {"feature_name": "tail", "score": "0.1"},
+    ]
+    clue_rows = [{"feature_name": row["feature_name"]} for row in candidate_rows]
+    calls: list[str] = []
+
+    def fake_execute_clue_test(bundle, spec, *, packet=None, model=None, split_name="train"):
+        calls.append(spec.feature_name)
+        if spec.feature_name == "strong_boundary":
+            label_delta, env_delta, random_delta, selectivity = 1.0, 0.0, 0.0, 0.2
+        elif spec.feature_name == "weak_boundary":
+            label_delta, env_delta, random_delta, selectivity = 0.0, 0.6, 0.2, -0.1
+        else:
+            label_delta, env_delta, random_delta, selectivity = 0.0, 0.0, 0.0, 0.0
+        return {
+            "test_effect_label_delta": label_delta,
+            "test_effect_env_delta": env_delta,
+            "test_random_control_delta": random_delta,
+            "test_effect_selectivity": selectivity,
+        }
+
+    monkeypatch.setattr(sweep, "execute_clue_test", fake_execute_clue_test)
+
+    rows = sweep.build_active_boundary_score_rows(
+        bundle=object(),
+        clue_rows=clue_rows,
+        candidate_rows=candidate_rows,
+        top_k=2,
+        boundary_fraction=0.5,
+        evidence_weight=0.25,
+    )
+
+    selected = [row["feature_name"] for row in sorted(rows, key=lambda row: float(row["score"]), reverse=True)[:2]]
+    assert set(selected) == {"core", "strong_boundary"}
+    assert calls == ["strong_boundary", "weak_boundary"]
+    assert {row["score_source"] for row in rows} == {"active_boundary"}

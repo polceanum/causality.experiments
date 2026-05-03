@@ -261,6 +261,21 @@ issues unless they invalidate an experimental result.
     evaluator and score source, and only revisit after adding stronger
     active-boundary tests or richer listwise/query-level supervision.
 
+- **Conditional-signal active boundary as an immediate margin widener**
+  - Attempt: retest only features near the `bridge_fused/w0.3/top512` cutoff
+    with cheap conditional-signal checks, then rerank that local boundary while
+    keeping the core support fixed.
+  - Result: the method made real replacements (`51/512`) and reduced
+    env-dominant selected features from `5` to `2`, but compact downstream WGA
+    regressed below the incumbent and failed the stats/best-random gates on one
+    of two seeds.
+  - Interpretation: simply lowering env-dominant count or improving conditional
+    signal is not sufficient; the replaced features likely include useful
+    bridge support that the official causal-shrink consumer needs.
+  - Action: keep active-boundary tooling, but do not promote the
+    conditional-signal variant. A future boundary scorer should use model-effect
+    or validation-loss-aware evidence before another downstream screen.
+
 - **Activation-gap fields as bridge-ranker features**
   - Attempt: add activation label/environment gaps and alignment one-hot fields
     to bridge training rows and the ridge ranker, then refresh the offline
