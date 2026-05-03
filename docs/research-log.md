@@ -241,6 +241,27 @@ signals. Keep this focused on what was tried and what was learned.
   paired replacement evaluation or ensemble the probe signal across splits
   before spending downstream budget.
 
+## 2026-05-03: Split-Ensembled Model-Effect Boundary
+
+- Added `active_boundary_model_effect_ensemble`, which averages the same
+  boundary ablation evidence across five balanced train-split probe seeds
+  before normalizing and reranking the boundary band. This keeps the scorer
+  deterministic and cheap while testing whether the single-probe variant was
+  failing mostly from split noise.
+- Support diagnostics showed no top-512 stabilization benefit on refreshed
+  Waterbirds `bridge_fused/w0.3/top512`: the ensemble selected the same top-512
+  support as the single-probe model-effect scorer, with `436/512` overlap with
+  the incumbent (`76/512` replacements) and env-dominant selected count `8`.
+- Compact paired two-seed, five-retrain screen matched the single-probe result
+  exactly: mean WGA `0.9349227548`, seed 101 WGA `0.9321507812`, seed 102 WGA
+  `0.9376947284`, mean delta `+0.0008924603` to stats, mean delta
+  `+0.0005570948` to the best random control, and only `1/2` non-negative
+  stats/best-random seeds.
+- Interpretation: split ensembling alone does not fix the model-effect boundary
+  failure. The next viable boundary route needs paired replacement evaluation,
+  an explicit env-risk guard, or a different downstream-aware target rather
+  than averaging the same ablation signal.
+
 ## 2026-04-22
 
 - Read the source document, which is a survey and experiment blueprint rather

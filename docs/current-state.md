@@ -327,7 +327,10 @@ Decision:
   `76/512` selected features and improved seed 102 to WGA `0.9376947284`, but
   mean compact WGA still trailed the incumbent (`0.9349227548` versus
   `0.9352525771`) and it was non-negative against stats/best-random on only
-  `1/2` seeds. Keep the hook, but do not promote this scorer.
+  `1/2` seeds. The split-ensembled variant
+  `active_boundary_model_effect_ensemble` produced the same top-512 support and
+  the same compact metrics, so the issue is not only split noise. Keep the
+  hook, but do not promote this scorer family.
 
 ### Clue Fusion and Discovery Masks
 
@@ -426,6 +429,9 @@ Decision:
    - Do not full-budget promote the model-effect active-boundary variant. It is
      a better boundary target than conditional signal on one seed, but still
      fails paired stats and best-random compact gates.
+   - Do not spend more compact screens on split-ensembling the same
+     model-effect boundary score alone; the first ensemble produced identical
+     support and metrics to the single-probe scorer.
    - Do not re-add raw activation-gap fields directly without a versioned corpus
      and held-out win.
 

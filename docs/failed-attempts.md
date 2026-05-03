@@ -290,6 +290,19 @@ issues unless they invalidate an experimental result.
   - Action: keep the scorer as instrumentation. Do not full-budget promote it;
     revisit only with split-ensembled or paired replacement evaluation.
 
+- **Split-ensembled model-effect active boundary as a stability fix**
+  - Attempt: average boundary ablation evidence across five balanced probe
+    splits before reranking the `bridge_fused/w0.3/top512` boundary.
+  - Result: the ensemble selected the same top-512 support as the single-probe
+    model-effect scorer and reproduced the same compact downstream metrics:
+    mean WGA `0.9349`, one negative stats/best-random seed, and mean below the
+    incumbent `0.9353`.
+  - Interpretation: the failure is not primarily due to one unlucky train/probe
+    split; the current ablation target itself admits replacements that are not
+    stable under the official causal-shrink consumer.
+  - Action: stop split-ensembling this exact scorer. Next boundary work should
+    use paired replacement evaluation or add an explicit env-risk constraint.
+
 - **Activation-gap fields as bridge-ranker features**
   - Attempt: add activation label/environment gaps and alignment one-hot fields
     to bridge training rows and the ridge ranker, then refresh the offline
