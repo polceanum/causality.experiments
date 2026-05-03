@@ -216,6 +216,31 @@ signals. Keep this focused on what was tried and what was learned.
   features. Future boundary testing needs a better target, likely model-effect
   tests or validation-loss-aware replacement scoring, before downstream budget.
 
+## 2026-05-03: Model-Effect Active Boundary
+
+- Added `active_boundary_model_effect` as a second top-k-specific support
+  variant. Instead of relying on conditional feature correlations, it fits a
+  lightweight balanced logistic probe on the current top-k support plus the
+  local boundary band, then estimates boundary evidence from held-out train WGA
+  damage, log-loss damage, and coefficient magnitude when each boundary feature
+  is ablated.
+- Support diagnostics showed a real intervention: refreshed Waterbirds
+  `bridge_fused/w0.3/top512` overlap fell to `436/512` (`0.7415` Jaccard), so
+  `76/512` selected features changed. This scorer increased env-dominant
+  selected features from `5` to `8`, unlike the conditional-signal variant,
+  which reduced them to `2`.
+- Compact paired two-seed, five-retrain screen still did not promote. Incumbent
+  compact mean WGA was `0.9352525771`; model-effect active-boundary mean WGA
+  was `0.9349227548`. It improved seed 102 to `0.9376947284`, but seed 101
+  regressed to `0.9321507812`, leaving mean deltas `+0.0022228360` to official
+  DFR, `+0.0008924603` to stats, and `+0.0005570948` to the best random
+  control, with only `1/2` non-negative stats and best-random seeds.
+- Interpretation: model-effect ablation is a better aligned boundary target
+  than conditional signal, but the current one-probe scorer is too noisy and
+  can admit env-dominant replacements. The next boundary attempt should use
+  paired replacement evaluation or ensemble the probe signal across splits
+  before spending downstream budget.
+
 ## 2026-04-22
 
 - Read the source document, which is a survey and experiment blueprint rather

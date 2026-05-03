@@ -276,6 +276,20 @@ issues unless they invalidate an experimental result.
     conditional-signal variant. A future boundary scorer should use model-effect
     or validation-loss-aware evidence before another downstream screen.
 
+- **Single-probe model-effect active boundary as an immediate margin widener**
+  - Attempt: fit a lightweight balanced train-split probe on incumbent support
+    plus the local top-512 boundary, then rerank boundary features by held-out
+    WGA/log-loss damage when each feature is ablated.
+  - Result: the scorer made larger real replacements (`76/512`) and produced a
+    strong seed-102 compact WGA (`0.9377`), but mean compact WGA still trailed
+    the incumbent (`0.9349` versus `0.9353`) and it cleared stats/best-random
+    gates on only `1/2` seeds.
+  - Interpretation: model-effect evidence is closer to the downstream consumer
+    than conditional signal, but a single train-split probe is too noisy and can
+    admit env-dominant replacements that hurt seed stability.
+  - Action: keep the scorer as instrumentation. Do not full-budget promote it;
+    revisit only with split-ensembled or paired replacement evaluation.
+
 - **Activation-gap fields as bridge-ranker features**
   - Attempt: add activation label/environment gaps and alignment one-hot fields
     to bridge training rows and the ridge ranker, then refresh the offline

@@ -25,6 +25,7 @@ from causality_experiments.counterfactual_clue_tests import execute_clue_test
 from causality_experiments.data import load_dataset
 from causality_experiments.llm_clue_planner import ClueTestSpec
 from causality_experiments.run import run_experiment
+from causality_experiments.sklearn_compat import LogisticRegression, StandardScaler
 from scripts.run_waterbirds_clue_fusion_sweep import (
     build_bridge_score_rows,
     build_downstream_candidate,
@@ -437,8 +438,175 @@ def build_active_boundary_score_rows(
     return rows
 
 
+def _feature_indices_by_name(bundle: Any, rows: list[dict[str, Any]]) -> dict[str, int]:
+    feature_columns = list((getattr(bundle, "metadata", None) or {}).get("feature_columns", []) or [])
+    by_name = {str(name): index for index, name in enumerate(feature_columns)}
+    for row in rows:
+        name = str(row.get("feature_name", ""))
+        if not name or name in by_name:
+            continue
+        value = str(row.get("feature_index", "")).strip()
+        try:
+            index = int(value)
+        except ValueError:
+            continue
+        if 0 <= index < int(getattr(bundle, "input_dim", 0)):
+            by_name[name] = index
+    return by_name
+
+
+def _balanced_probe_split(groups: np.ndarray, *, seed: int, eval_fraction: float) -> tuple[np.ndarray, np.ndarray]:
+    rng = np.random.default_rng(seed)
+    train_parts: list[np.ndarray] = []
+    eval_parts: list[np.ndarray] = []
+    for group in sorted(int(value) for value in np.unique(groups)):
+        indices = np.flatnonzero(groups == group)
+        rng.shuffle(indices)
+        eval_count = min(len(indices) - 1, max(1, int(round(float(eval_fraction) * len(indices)))))
+        if eval_count <= 0:
+            train_parts.append(indices)
+            continue
+        eval_parts.append(indices[:eval_count])
+        train_parts.append(indices[eval_count:])
+    if not train_parts or not eval_parts:
+        indices = np.arange(len(groups))
+        rng.shuffle(indices)
+        split_at = max(1, min(len(indices) - 1, int(round((1.0 - float(eval_fraction)) * len(indices)))))
+        return indices[:split_at], indices[split_at:]
+    return np.concatenate(train_parts), np.concatenate(eval_parts)
+
+
+def _binary_log_loss_from_scores(scores: np.ndarray, y: np.ndarray, positive_label: int) -> float:
+    target = (y == int(positive_label)).astype(np.float64)
+    return float(np.mean(np.maximum(scores, 0.0) - scores * target + np.log1p(np.exp(-np.abs(scores)))))
+
+
+def _worst_group_accuracy_from_predictions(pred: np.ndarray, y: np.ndarray, groups: np.ndarray) -> float:
+    scores: list[float] = []
+    for group in sorted(int(value) for value in np.unique(groups)):
+        mask = groups == group
+        if np.any(mask):
+            scores.append(float(np.mean(pred[mask] == y[mask])))
+    return min(scores) if scores else 0.0
+
+
+def build_active_boundary_model_effect_score_rows(
+    *,
+    bundle: Any,
+    clue_rows: list[dict[str, Any]],
+    candidate_rows: list[dict[str, str]],
+    top_k: int,
+    boundary_fraction: float = 0.15,
+    evidence_weight: float = 0.35,
+    probe_seed: int = 17,
+    eval_fraction: float = 0.35,
+) -> list[dict[str, str]]:
+    if top_k <= 0:
+        raise ValueError("top_k must be positive for active-boundary model-effect scoring.")
+    base_norm = _normalise_score_map(candidate_rows)
+    names = [row["feature_name"] for row in candidate_rows]
+    ranked_names = sorted(names, key=lambda name: base_norm.get(name, 0.0), reverse=True)
+    window = max(1, int(round(float(boundary_fraction) * top_k)))
+    low_rank = max(0, top_k - window)
+    high_rank = min(len(ranked_names), top_k + window)
+    boundary_names = set(ranked_names[low_rank:high_rank])
+    support_names = set(ranked_names[: min(top_k, len(ranked_names))])
+    probe_names = list(dict.fromkeys([name for name in ranked_names if name in support_names or name in boundary_names]))
+    feature_indices = _feature_indices_by_name(bundle, [*clue_rows, *candidate_rows])
+    resolved_probe_names = [name for name in probe_names if name in feature_indices]
+    probe_indices = [feature_indices[name] for name in resolved_probe_names]
+    if not probe_indices:
+        raise ValueError("active-boundary model-effect scoring could not resolve any feature indices.")
+
+    train_split = bundle.split("train")
+    x = train_split["x"].detach().cpu().numpy().astype(np.float64, copy=False)
+    y = train_split["y"].detach().cpu().numpy().astype(np.int64, copy=False)
+    groups = train_split["group"].detach().cpu().numpy().astype(np.int64, copy=False)
+    train_idx, eval_idx = _balanced_probe_split(groups, seed=probe_seed, eval_fraction=eval_fraction)
+    scaler = StandardScaler()
+    x_train = scaler.fit_transform(x[train_idx][:, probe_indices])
+    x_eval = scaler.transform(x[eval_idx][:, probe_indices])
+    y_train = y[train_idx]
+    y_eval = y[eval_idx]
+    group_eval = groups[eval_idx]
+    class_counts = {int(label): int(np.sum(y_train == label)) for label in np.unique(y_train)}
+    class_weight = {
+        label: len(y_train) / max(len(class_counts) * count, 1)
+        for label, count in class_counts.items()
+    }
+    model = LogisticRegression(
+        penalty="l1",
+        solver="liblinear",
+        C=0.3,
+        max_iter=1000,
+        random_state=probe_seed,
+        class_weight=class_weight,
+    )
+    model.fit(x_train, y_train)
+    classes = [int(value) for value in getattr(model, "classes_", np.unique(y_train))]
+    if len(classes) != 2:
+        raise ValueError("active-boundary model-effect scoring currently supports binary classification.")
+    positive_label = classes[1]
+    base_pred = model.predict(x_eval)
+    base_wga = _worst_group_accuracy_from_predictions(base_pred, y_eval, group_eval)
+    base_scores = np.asarray(model.decision_function(x_eval), dtype=np.float64)
+    base_loss = _binary_log_loss_from_scores(base_scores, y_eval, positive_label)
+    coefficients = np.asarray(getattr(model, "coef_", np.zeros((1, len(probe_indices)))), dtype=np.float64)
+    coefficient_abs = np.abs(coefficients).mean(axis=0)
+    coefficient_max = float(np.max(coefficient_abs)) if coefficient_abs.size else 0.0
+    local_index_by_name = {name: index for index, name in enumerate(resolved_probe_names)}
+
+    raw_evidence: dict[str, float] = {}
+    details_by_feature: dict[str, tuple[float, float, float]] = {}
+    for name in sorted(boundary_names):
+        local_index = local_index_by_name.get(name)
+        if local_index is None or local_index >= x_eval.shape[1]:
+            raw_evidence[name] = 0.0
+            details_by_feature[name] = (0.0, 0.0, 0.0)
+            continue
+        ablated = np.array(x_eval, copy=True)
+        ablated[:, local_index] = 0.0
+        ablated_pred = model.predict(ablated)
+        ablated_wga = _worst_group_accuracy_from_predictions(ablated_pred, y_eval, group_eval)
+        ablated_scores = np.asarray(model.decision_function(ablated), dtype=np.float64)
+        ablated_loss = _binary_log_loss_from_scores(ablated_scores, y_eval, positive_label)
+        wga_effect = base_wga - ablated_wga
+        loss_effect = ablated_loss - base_loss
+        coef_effect = float(coefficient_abs[local_index] / coefficient_max) if coefficient_max > 1e-12 else 0.0
+        evidence = wga_effect + 0.25 * loss_effect + 0.05 * coef_effect
+        raw_evidence[name] = evidence
+        details_by_feature[name] = (wga_effect, loss_effect, coef_effect)
+    if raw_evidence:
+        low = min(raw_evidence.values())
+        high = max(raw_evidence.values())
+        if high - low < 1e-12:
+            evidence_norm = {name: 0.5 for name in raw_evidence}
+        else:
+            evidence_norm = {name: (value - low) / (high - low) for name, value in raw_evidence.items()}
+    else:
+        evidence_norm = {}
+
+    rows: list[dict[str, str]] = []
+    for row in candidate_rows:
+        name = row["feature_name"]
+        adjustment = float(evidence_weight) * (evidence_norm.get(name, 0.5) - 0.5) if name in boundary_names else 0.0
+        score = base_norm.get(name, 0.0) + adjustment
+        wga_effect, loss_effect, coef_effect = details_by_feature.get(name, (0.0, 0.0, 0.0))
+        updated = dict(row)
+        updated["active_boundary_model_effect"] = f"{raw_evidence.get(name, 0.0):.6f}"
+        updated["active_boundary_wga_effect"] = f"{wga_effect:.6f}"
+        updated["active_boundary_loss_effect"] = f"{loss_effect:.6f}"
+        updated["active_boundary_coef_effect"] = f"{coef_effect:.6f}"
+        updated["support_score"] = f"{score:.6f}"
+        updated["rank_score"] = f"{score:.6f}"
+        updated["score"] = f"{score:.6f}"
+        updated["score_source"] = "active_boundary_model_effect"
+        rows.append(updated)
+    return rows
+
+
 def _is_active_boundary_variant(variant_key: str) -> bool:
-    return variant_key in {"active_boundary"}
+    return variant_key in {"active_boundary", "active_boundary_model_effect"}
 
 
 def build_support_variant_score_rows(
@@ -692,19 +860,28 @@ def run_bridge_fused_sweep(
                     "artifact_risk",
                     "artifact_risk_boundary",
                     "active_boundary",
+                    "active_boundary_model_effect",
                 }:
                     raise ValueError(
                         "support variants must be one of: env_filter, margin_gate, stats_fill, "
                         "soft_env_penalty, stats_anchor, score_sqrt, score_square, constrained_support, "
                         "constrained_support_strict, constrained_support_loose, constrained_support_bridge, "
-                        "artifact_risk, artifact_risk_boundary, active_boundary."
+                        "artifact_risk, artifact_risk_boundary, active_boundary, active_boundary_model_effect."
                     )
                 if _is_active_boundary_variant(variant_key):
                     for top_k in top_k_values:
                         variant_path = out_dir / f"scores_{source}_{_weight_label(weight)}_{variant_key}_top{top_k}.csv"
-                        write_csv_rows(
-                            variant_path,
-                            build_active_boundary_score_rows(
+                        if variant_key == "active_boundary_model_effect":
+                            variant_rows = build_active_boundary_model_effect_score_rows(
+                                bundle=bundle,
+                                clue_rows=clue_rows,
+                                candidate_rows=bridge_rows,
+                                top_k=top_k,
+                                boundary_fraction=0.15,
+                                evidence_weight=0.35,
+                            )
+                        else:
+                            variant_rows = build_active_boundary_score_rows(
                                 bundle=bundle,
                                 clue_rows=clue_rows,
                                 candidate_rows=bridge_rows,
@@ -712,7 +889,10 @@ def run_bridge_fused_sweep(
                                 boundary_fraction=0.15,
                                 evidence_weight=0.25,
                                 split_name="train",
-                            ),
+                            )
+                        write_csv_rows(
+                            variant_path,
+                            variant_rows,
                         )
                         bridge_paths[(weight, variant_key, int(top_k))] = variant_path
                     continue

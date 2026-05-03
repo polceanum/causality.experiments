@@ -2,8 +2,10 @@ from pathlib import Path
 import json
 
 import numpy as np
+import torch
 import yaml
 
+from causality_experiments.data import DatasetBundle
 from scripts import run_waterbirds_bridge_fused_sweep as sweep
 
 
@@ -115,6 +117,7 @@ def test_bridge_fused_sweep_reports_paired_deltas(tmp_path: Path, monkeypatch) -
             "constrained_support_bridge",
             "artifact_risk_boundary",
             "active_boundary",
+            "active_boundary_model_effect",
         ],
         bridge_score_source="bridge_fused",
         bridge_alpha=10.0,
@@ -142,6 +145,7 @@ def test_bridge_fused_sweep_reports_paired_deltas(tmp_path: Path, monkeypatch) -
     assert "bridge_fused_w0p2_constrained_support_bridge_top1" in labels
     assert "bridge_fused_w0p2_artifact_risk_boundary_top1" in labels
     assert "bridge_fused_w0p2_active_boundary_top1" in labels
+    assert "bridge_fused_w0p2_active_boundary_model_effect_top1" in labels
     assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_env_filter.csv").exists()
     assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_soft_env_penalty.csv").exists()
     assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_score_square.csv").exists()
@@ -149,6 +153,7 @@ def test_bridge_fused_sweep_reports_paired_deltas(tmp_path: Path, monkeypatch) -
     assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_constrained_support_bridge_top1.csv").exists()
     assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_artifact_risk_boundary_top1.csv").exists()
     assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_active_boundary_top1.csv").exists()
+    assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_active_boundary_model_effect_top1.csv").exists()
     random_summary = summary["random_controls"][0]
     assert random_summary["label"] == "random_score_0_top1"
 
@@ -432,3 +437,64 @@ def test_active_boundary_retests_near_cutoff_only(monkeypatch) -> None:
     assert set(selected) == {"core", "strong_boundary"}
     assert calls == ["strong_boundary", "weak_boundary"]
     assert {row["score_source"] for row in rows} == {"active_boundary"}
+
+
+def test_active_boundary_model_effect_promotes_helpful_boundary_feature() -> None:
+    rng = np.random.default_rng(7)
+    y = np.tile(np.array([0, 1], dtype=np.int64), 80)
+    env = np.repeat(np.array([0, 1], dtype=np.int64), 80)
+    rng.shuffle(env)
+    group = env * 2 + y
+    x = np.stack(
+        [
+            y + rng.normal(scale=0.35, size=len(y)),
+            env + rng.normal(scale=0.05, size=len(y)),
+            y + rng.normal(scale=0.05, size=len(y)),
+            rng.normal(size=len(y)),
+        ],
+        axis=1,
+    ).astype(np.float32)
+    split = {
+        "x": torch.tensor(x, dtype=torch.float32),
+        "y": torch.tensor(y, dtype=torch.long),
+        "env": torch.tensor(env, dtype=torch.long),
+        "group": torch.tensor(group, dtype=torch.long),
+    }
+    bundle = DatasetBundle(
+        name="probe_fixture",
+        task="classification",
+        splits={"train": split},
+        input_dim=4,
+        output_dim=2,
+        metadata={"feature_columns": ["core", "env_boundary", "strong_boundary", "tail"]},
+    )
+    clue_rows = [
+        {"feature_name": "core", "feature_index": "0"},
+        {"feature_name": "env_boundary", "feature_index": "1"},
+        {"feature_name": "strong_boundary", "feature_index": "2"},
+        {"feature_name": "tail", "feature_index": "3"},
+    ]
+    candidate_rows = [
+        {"feature_name": "core", "score": "1.0"},
+        {"feature_name": "env_boundary", "score": "0.90"},
+        {"feature_name": "strong_boundary", "score": "0.89"},
+        {"feature_name": "tail", "score": "0.1"},
+    ]
+
+    rows = sweep.build_active_boundary_model_effect_score_rows(
+        bundle=bundle,
+        clue_rows=clue_rows,
+        candidate_rows=candidate_rows,
+        top_k=2,
+        boundary_fraction=0.5,
+        evidence_weight=0.35,
+        probe_seed=5,
+    )
+
+    by_feature = {row["feature_name"]: row for row in rows}
+    selected = [row["feature_name"] for row in sorted(rows, key=lambda row: float(row["score"]), reverse=True)[:2]]
+    assert set(selected) == {"core", "strong_boundary"}
+    assert float(by_feature["strong_boundary"]["active_boundary_model_effect"]) > float(
+        by_feature["env_boundary"]["active_boundary_model_effect"]
+    )
+    assert {row["score_source"] for row in rows} == {"active_boundary_model_effect"}

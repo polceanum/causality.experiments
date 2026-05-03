@@ -23,8 +23,8 @@ what is the bar, what should be tried next, and what should not be repeated.
 
 ## Current Snapshot
 
-- Full local regression suite is green at `159 passed` after the bridge
-  candidate reporting and support-audit tooling addition.
+- Full local regression suite is green at `173 passed` after the model-effect
+  active-boundary scoring addition.
 - The repo has a runnable PyTorch experiment harness for all eight paper
   fixtures and a local Waterbirds benchmark path.
 - Runnable methods include `constant`, `oracle`, `erm`, `dfr`, `causal_dfr`,
@@ -320,6 +320,14 @@ Decision:
   `0.9352525771`, mean delta `-0.0001056790` to stats, and mean delta
   `-0.0004410446` to the best random control. Keep it as boundary-test
   instrumentation, not as a promoted candidate.
+- A stronger `active_boundary_model_effect` variant is also available. It fits
+  a lightweight balanced train-split probe on the current support plus boundary
+  band, then reranks the boundary by held-out probe WGA/loss damage when each
+  feature is ablated. On refreshed Waterbirds `w0.3/top512`, it changed
+  `76/512` selected features and improved seed 102 to WGA `0.9376947284`, but
+  mean compact WGA still trailed the incumbent (`0.9349227548` versus
+  `0.9352525771`) and it was non-negative against stats/best-random on only
+  `1/2` seeds. Keep the hook, but do not promote this scorer.
 
 ### Clue Fusion and Discovery Masks
 
@@ -415,6 +423,9 @@ Decision:
    - Do not full-budget promote the first active-boundary variant. It makes real
      support replacements and lowers env-dominant count, but the replacements
      hurt compact downstream WGA.
+   - Do not full-budget promote the model-effect active-boundary variant. It is
+     a better boundary target than conditional signal on one seed, but still
+     fails paired stats and best-random compact gates.
    - Do not re-add raw activation-gap fields directly without a versioned corpus
      and held-out win.
 
