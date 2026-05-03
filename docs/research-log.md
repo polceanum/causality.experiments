@@ -290,6 +290,31 @@ signals. Keep this focused on what was tried and what was learned.
   replacements directly or learn an env guard from downstream paired outcomes,
   rather than relying on a fixed correlation penalty.
 
+## 2026-05-03: Paired Replacement Boundary Probe
+
+- Added `active_boundary_paired_replacement`, a stricter boundary scorer that
+  compares outside-boundary challengers directly against the incumbent support
+  feature they would replace. For each pair it retrains a lightweight balanced
+  probe on the original top-k support and on the one-feature replacement
+  support, then scores the replacement by held-out WGA delta, log-loss delta,
+  and a small shortcut-risk penalty.
+- The first loose accept rule exposed a useful failure mode: it accepted `9`
+  top-512 replacements, but the deltas were microscopic log-loss changes with
+  effectively zero WGA improvement. Compact downstream WGA regressed to
+  `0.9345873892` versus incumbent `0.9352525771`, and seed 101 failed the stats
+  gate.
+- Tightening the accept threshold to require a meaningful pair delta rejects
+  those noise-level swaps. On refreshed Waterbirds `bridge_fused/w0.3/top512`,
+  the thresholded scorer accepts `0` replacements and therefore ties the compact
+  incumbent exactly: mean WGA `0.9352525771`, mean deltas `+0.0025526583` to
+  official DFR, `+0.0012222826` to stats, and `+0.0008869171` to the best
+  deterministic random control, with all compact gates `2/2`.
+- Interpretation: paired replacement is the right evaluation shape, but the
+  current train-split logistic probe does not expose strong enough local
+  replacement signal around the incumbent support. Keep the harness; the next
+  useful version should learn pair acceptance from downstream paired outcomes or
+  use a stronger validation-aware probe target.
+
 ## 2026-04-22
 
 - Read the source document, which is a survey and experiment blueprint rather

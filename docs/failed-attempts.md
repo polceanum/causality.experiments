@@ -319,6 +319,21 @@ issues unless they invalidate an experimental result.
     diagnostic so far; next work should score paired replacements directly or
     learn the guard from downstream paired outcomes.
 
+- **Direct paired replacement boundary as a promotion candidate**
+  - Attempt: score each near-cutoff challenger by replacing a specific weak
+    incumbent support feature, retraining a lightweight balanced probe, and
+    accepting only if the one-feature replacement improves the probe target.
+  - Result: a loose accept rule selected `9` swaps from near-zero log-loss noise
+    and regressed compact WGA. A stricter, committed threshold rejected all
+    noise-level swaps and tied the incumbent exactly in compact screening
+    (`0.9352525771` mean WGA, all gates `2/2`).
+  - Interpretation: the paired evaluation shape is better than global boundary
+    reranking, but the current train-split logistic proxy does not find a real
+    replacement signal around `bridge_fused/w0.3/top512`.
+  - Action: keep the paired-replacement harness. Do not run a full promotion
+    screen unless a learned/downstream-calibrated pair acceptor produces
+    nonzero compact replacements with positive paired gates.
+
 - **Activation-gap fields as bridge-ranker features**
   - Attempt: add activation label/environment gaps and alignment one-hot fields
     to bridge training rows and the ridge ranker, then refresh the offline

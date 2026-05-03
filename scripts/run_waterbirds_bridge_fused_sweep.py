@@ -490,6 +490,52 @@ def _worst_group_accuracy_from_predictions(pred: np.ndarray, y: np.ndarray, grou
     return min(scores) if scores else 0.0
 
 
+def _probe_feature_set_metrics(
+    *,
+    x: np.ndarray,
+    y: np.ndarray,
+    groups: np.ndarray,
+    feature_indices: list[int],
+    seeds: tuple[int, ...],
+    eval_fraction: float,
+) -> tuple[float, float]:
+    if not feature_indices:
+        raise ValueError("paired replacement probe requires at least one resolved feature.")
+    wga_values: list[float] = []
+    loss_values: list[float] = []
+    for seed in seeds:
+        train_idx, eval_idx = _balanced_probe_split(groups, seed=int(seed), eval_fraction=eval_fraction)
+        scaler = StandardScaler()
+        x_train = scaler.fit_transform(x[train_idx][:, feature_indices])
+        x_eval = scaler.transform(x[eval_idx][:, feature_indices])
+        y_train = y[train_idx]
+        y_eval = y[eval_idx]
+        group_eval = groups[eval_idx]
+        class_counts = {int(label): int(np.sum(y_train == label)) for label in np.unique(y_train)}
+        class_weight = {
+            label: len(y_train) / max(len(class_counts) * count, 1)
+            for label, count in class_counts.items()
+        }
+        model = LogisticRegression(
+            penalty="l1",
+            solver="liblinear",
+            C=0.3,
+            max_iter=1000,
+            random_state=int(seed),
+            class_weight=class_weight,
+        )
+        model.fit(x_train, y_train)
+        classes = [int(value) for value in getattr(model, "classes_", np.unique(y_train))]
+        if len(classes) != 2:
+            raise ValueError("paired replacement probe currently supports binary classification.")
+        positive_label = classes[1]
+        pred = model.predict(x_eval)
+        scores = np.asarray(model.decision_function(x_eval), dtype=np.float64)
+        wga_values.append(_worst_group_accuracy_from_predictions(pred, y_eval, group_eval))
+        loss_values.append(_binary_log_loss_from_scores(scores, y_eval, positive_label))
+    return float(statistics.mean(wga_values)), float(statistics.mean(loss_values))
+
+
 def build_active_boundary_model_effect_score_rows(
     *,
     bundle: Any,
@@ -626,12 +672,141 @@ def build_active_boundary_model_effect_score_rows(
     return rows
 
 
+def build_active_boundary_paired_replacement_score_rows(
+    *,
+    bundle: Any,
+    clue_rows: list[dict[str, Any]],
+    candidate_rows: list[dict[str, str]],
+    top_k: int,
+    boundary_fraction: float = 0.10,
+    probe_seeds: tuple[int, ...] = (17, 29, 43),
+    eval_fraction: float = 0.35,
+    min_pair_delta: float = 1e-3,
+    env_risk_weight: float = 0.25,
+) -> list[dict[str, str]]:
+    if top_k <= 0:
+        raise ValueError("top_k must be positive for paired replacement scoring.")
+    if not probe_seeds:
+        raise ValueError("paired replacement scoring requires at least one probe seed.")
+    base_norm = _normalise_score_map(candidate_rows)
+    names = [row["feature_name"] for row in candidate_rows]
+    ranked_names = sorted(names, key=lambda name: base_norm.get(name, 0.0), reverse=True)
+    support_names = ranked_names[: min(top_k, len(ranked_names))]
+    window = max(1, int(round(float(boundary_fraction) * top_k)))
+    support_tail = sorted(
+        ranked_names[max(0, top_k - window) : min(top_k, len(ranked_names))],
+        key=lambda name: base_norm.get(name, 0.0),
+    )
+    challengers = ranked_names[top_k : min(len(ranked_names), top_k + window)]
+    if not support_names or not support_tail or not challengers:
+        return [
+            {
+                **row,
+                "active_boundary_pair_delta": "0.000000",
+                "active_boundary_pair_wga_delta": "0.000000",
+                "active_boundary_pair_loss_delta": "0.000000",
+                "active_boundary_pair_env_risk": "0.000000",
+                "active_boundary_pair_role": "unchanged",
+                "active_boundary_pair_feature": "",
+                "score_source": "active_boundary_paired_replacement",
+            }
+            for row in candidate_rows
+        ]
+
+    feature_indices = _feature_indices_by_name(bundle, [*clue_rows, *candidate_rows])
+    resolved_support = [name for name in support_names if name in feature_indices]
+    if not resolved_support:
+        raise ValueError("paired replacement scoring could not resolve incumbent support features.")
+    train_split = bundle.split("train")
+    x = train_split["x"].detach().cpu().numpy().astype(np.float64, copy=False)
+    y = train_split["y"].detach().cpu().numpy().astype(np.int64, copy=False)
+    groups = train_split["group"].detach().cpu().numpy().astype(np.int64, copy=False)
+    base_indices = [feature_indices[name] for name in resolved_support]
+    base_wga, base_loss = _probe_feature_set_metrics(
+        x=x,
+        y=y,
+        groups=groups,
+        feature_indices=base_indices,
+        seeds=tuple(int(seed) for seed in probe_seeds),
+        eval_fraction=eval_fraction,
+    )
+    clues_by_feature = {str(row.get("feature_name", "")): row for row in clue_rows}
+    accepted: dict[str, str] = {}
+    detail_by_feature: dict[str, tuple[float, float, float, float, str, str]] = {}
+    paired = zip(challengers, support_tail)
+    for challenger, incumbent in paired:
+        if challenger not in feature_indices or incumbent not in resolved_support:
+            continue
+        replacement_names = [challenger if name == incumbent else name for name in resolved_support]
+        replacement_indices = [feature_indices[name] for name in replacement_names]
+        replacement_wga, replacement_loss = _probe_feature_set_metrics(
+            x=x,
+            y=y,
+            groups=groups,
+            feature_indices=replacement_indices,
+            seeds=tuple(int(seed) for seed in probe_seeds),
+            eval_fraction=eval_fraction,
+        )
+        wga_delta = replacement_wga - base_wga
+        loss_delta = base_loss - replacement_loss
+        clue = clues_by_feature.get(challenger, {})
+        env_risk = max(0.0, _safe_float(clue, "env_corr") - _safe_float(clue, "label_corr"))
+        pair_delta = wga_delta + 0.25 * loss_delta - float(env_risk_weight) * env_risk
+        accepted_pair = pair_delta > float(min_pair_delta)
+        if accepted_pair:
+            accepted[incumbent] = challenger
+        detail_by_feature[challenger] = (pair_delta, wga_delta, loss_delta, env_risk, "accepted" if accepted_pair else "rejected", incumbent)
+        detail_by_feature[incumbent] = (-pair_delta, -wga_delta, -loss_delta, env_risk, "evicted" if accepted_pair else "kept", challenger)
+
+    selected_order: list[str] = []
+    selected_set: set[str] = set()
+    for name in support_names:
+        selected_name = accepted.get(name, name)
+        if selected_name in selected_set:
+            continue
+        selected_order.append(selected_name)
+        selected_set.add(selected_name)
+    for name in ranked_names:
+        if len(selected_order) >= top_k:
+            break
+        if name not in selected_set:
+            selected_order.append(name)
+            selected_set.add(name)
+    selected_rank = {name: index for index, name in enumerate(selected_order[:top_k])}
+    denominator = max(len(selected_rank), 1)
+    rows: list[dict[str, str]] = []
+    for row in candidate_rows:
+        name = row["feature_name"]
+        if name in selected_rank:
+            score = 2.0 + (denominator - selected_rank[name]) / denominator
+        else:
+            score = 0.1 * base_norm.get(name, 0.0)
+        pair_delta, wga_delta, loss_delta, env_risk, role, pair_feature = detail_by_feature.get(
+            name,
+            (0.0, 0.0, 0.0, 0.0, "unchanged", ""),
+        )
+        updated = dict(row)
+        updated["active_boundary_pair_delta"] = f"{pair_delta:.6f}"
+        updated["active_boundary_pair_wga_delta"] = f"{wga_delta:.6f}"
+        updated["active_boundary_pair_loss_delta"] = f"{loss_delta:.6f}"
+        updated["active_boundary_pair_env_risk"] = f"{env_risk:.6f}"
+        updated["active_boundary_pair_role"] = role
+        updated["active_boundary_pair_feature"] = pair_feature
+        updated["support_score"] = f"{score:.6f}"
+        updated["rank_score"] = f"{score:.6f}"
+        updated["score"] = f"{score:.6f}"
+        updated["score_source"] = "active_boundary_paired_replacement"
+        rows.append(updated)
+    return rows
+
+
 def _is_active_boundary_variant(variant_key: str) -> bool:
     return variant_key in {
         "active_boundary",
         "active_boundary_model_effect",
         "active_boundary_model_effect_ensemble",
         "active_boundary_model_effect_env_guard",
+        "active_boundary_paired_replacement",
     }
 
 
@@ -889,18 +1064,30 @@ def run_bridge_fused_sweep(
                     "active_boundary_model_effect",
                     "active_boundary_model_effect_ensemble",
                     "active_boundary_model_effect_env_guard",
+                    "active_boundary_paired_replacement",
                 }:
                     raise ValueError(
                         "support variants must be one of: env_filter, margin_gate, stats_fill, "
                         "soft_env_penalty, stats_anchor, score_sqrt, score_square, constrained_support, "
                         "constrained_support_strict, constrained_support_loose, constrained_support_bridge, "
                         "artifact_risk, artifact_risk_boundary, active_boundary, active_boundary_model_effect, "
-                        "active_boundary_model_effect_ensemble, active_boundary_model_effect_env_guard."
+                        "active_boundary_model_effect_ensemble, active_boundary_model_effect_env_guard, "
+                        "active_boundary_paired_replacement."
                     )
                 if _is_active_boundary_variant(variant_key):
                     for top_k in top_k_values:
                         variant_path = out_dir / f"scores_{source}_{_weight_label(weight)}_{variant_key}_top{top_k}.csv"
-                        if variant_key == "active_boundary_model_effect_env_guard":
+                        if variant_key == "active_boundary_paired_replacement":
+                            variant_rows = build_active_boundary_paired_replacement_score_rows(
+                                bundle=bundle,
+                                clue_rows=clue_rows,
+                                candidate_rows=bridge_rows,
+                                top_k=top_k,
+                                boundary_fraction=0.10,
+                                probe_seeds=(17, 29, 43),
+                                env_risk_weight=0.25,
+                            )
+                        elif variant_key == "active_boundary_model_effect_env_guard":
                             variant_rows = build_active_boundary_model_effect_score_rows(
                                 bundle=bundle,
                                 clue_rows=clue_rows,

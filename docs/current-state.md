@@ -23,8 +23,8 @@ what is the bar, what should be tried next, and what should not be repeated.
 
 ## Current Snapshot
 
-- Full local regression suite is green at `173 passed` after the model-effect
-  active-boundary scoring addition.
+- Full local regression suite is green at `173 passed` after the paired-
+  replacement boundary scoring addition.
 - The repo has a runnable PyTorch experiment harness for all eight paper
   fixtures and a local Waterbirds benchmark path.
 - Runnable methods include `constant`, `oracle`, `erm`, `dfr`, `causal_dfr`,
@@ -340,6 +340,14 @@ Decision:
   screen did not promote. Full mean WGA was `0.9357854962`, below incumbent
   `0.9367601395`, with one negative stats/best-random seed. Keep it as the
   best boundary guardrail, not the active candidate.
+- `active_boundary_paired_replacement` now evaluates explicit incumbent-vs-
+  challenger swaps by retraining a lightweight support probe for each boundary
+  pair. A loose version accepted `9` replacements on microscopic log-loss
+  deltas with no WGA gain and regressed the compact screen. The committed
+  thresholded version rejects those noise-level swaps (`0/512` replacements)
+  and ties the incumbent compact result exactly: mean WGA `0.9352525771`, all
+  compact gates `2/2`. Keep the harness for future learned replacement targets,
+  but do not promote it as-is.
 
 ### Clue Fusion and Discovery Masks
 

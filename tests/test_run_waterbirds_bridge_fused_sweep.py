@@ -120,6 +120,7 @@ def test_bridge_fused_sweep_reports_paired_deltas(tmp_path: Path, monkeypatch) -
             "active_boundary_model_effect",
             "active_boundary_model_effect_ensemble",
             "active_boundary_model_effect_env_guard",
+            "active_boundary_paired_replacement",
         ],
         bridge_score_source="bridge_fused",
         bridge_alpha=10.0,
@@ -150,6 +151,7 @@ def test_bridge_fused_sweep_reports_paired_deltas(tmp_path: Path, monkeypatch) -
     assert "bridge_fused_w0p2_active_boundary_model_effect_top1" in labels
     assert "bridge_fused_w0p2_active_boundary_model_effect_ensemble_top1" in labels
     assert "bridge_fused_w0p2_active_boundary_model_effect_env_guard_top1" in labels
+    assert "bridge_fused_w0p2_active_boundary_paired_replacement_top1" in labels
     assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_env_filter.csv").exists()
     assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_soft_env_penalty.csv").exists()
     assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_score_square.csv").exists()
@@ -160,6 +162,7 @@ def test_bridge_fused_sweep_reports_paired_deltas(tmp_path: Path, monkeypatch) -
     assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_active_boundary_model_effect_top1.csv").exists()
     assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_active_boundary_model_effect_ensemble_top1.csv").exists()
     assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_active_boundary_model_effect_env_guard_top1.csv").exists()
+    assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_active_boundary_paired_replacement_top1.csv").exists()
     random_summary = summary["random_controls"][0]
     assert random_summary["label"] == "random_score_0_top1"
 
@@ -541,3 +544,23 @@ def test_active_boundary_model_effect_promotes_helpful_boundary_feature() -> Non
     assert set(guarded_selected) == {"core", "strong_boundary"}
     assert float(guarded_by_feature["env_boundary"]["active_boundary_env_risk"]) > 0.0
     assert {row["score_source"] for row in guarded_rows} == {"active_boundary_model_effect_env_guard"}
+
+    paired_rows = sweep.build_active_boundary_paired_replacement_score_rows(
+        bundle=bundle,
+        clue_rows=clue_rows,
+        candidate_rows=candidate_rows,
+        top_k=2,
+        boundary_fraction=0.5,
+        probe_seeds=(5, 11),
+        env_risk_weight=0.0,
+    )
+    paired_by_feature = {row["feature_name"]: row for row in paired_rows}
+    paired_selected = [
+        row["feature_name"]
+        for row in sorted(paired_rows, key=lambda row: float(row["score"]), reverse=True)[:2]
+    ]
+    assert set(paired_selected) == {"core", "strong_boundary"}
+    assert paired_by_feature["strong_boundary"]["active_boundary_pair_role"] == "accepted"
+    assert paired_by_feature["env_boundary"]["active_boundary_pair_role"] == "evicted"
+    assert float(paired_by_feature["strong_boundary"]["active_boundary_pair_delta"]) > 0.0
+    assert {row["score_source"] for row in paired_rows} == {"active_boundary_paired_replacement"}
