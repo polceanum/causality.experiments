@@ -301,6 +301,16 @@ Decision:
   selected top-512 set even with larger penalties; the incumbent already has
   very low artifact-risk under this signal. Treat this as instrumentation and a
   stop-rule, not as a downstream promotion candidate.
+- Pairwise/listwise-style bridge supervision is now implemented in
+  `scripts/train_llm_clue_bridge_ranker.py`. The leave-one-fixture-out
+  evaluator reports `pairwise_bridge_ranker` and conservative
+  `pairwise_stats_fused_w*` rows. On the refreshed trace corpus, raw pairwise
+  improves scalar bridge top-1 recovery (`0.375` versus `0.25`) but remains
+  below stats (`0.625`); `pairwise_stats_fused_w0.3` preserves stats top-1 and
+  improves top-2/top-4 to `0.375`/`0.34375`. Waterbirds compact screens through
+  the official causal-shrink consumer did not promote: `w0.1`, `w0.3`, and
+  `w0.5` all trailed stats and the best random control on mean. Keep the
+  pairwise scorer as supervision infrastructure, not as the active candidate.
 
 ### Clue Fusion and Discovery Masks
 
@@ -390,6 +400,9 @@ Decision:
    - Do not full-budget promote the first artifact-risk variants. They currently
      leave the incumbent top-512 support unchanged; the next useful step is a
      stronger boundary test signal or pairwise/listwise bridge supervision.
+   - Do not full-budget promote the first pairwise bridge-fused variants. They
+     improve held-out fixture diagnostics at wider supports, but compact
+     Waterbirds screens fail the stats and best-random gates.
    - Do not re-add raw activation-gap fields directly without a versioned corpus
      and held-out win.
 

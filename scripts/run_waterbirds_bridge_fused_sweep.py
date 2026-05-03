@@ -26,6 +26,7 @@ from causality_experiments.run import run_experiment
 from scripts.run_waterbirds_clue_fusion_sweep import (
     build_bridge_score_rows,
     build_downstream_candidate,
+    build_pairwise_bridge_score_rows,
     build_policy_score_rows,
     build_source_score_rows,
     with_dataset_path,
@@ -556,8 +557,10 @@ def run_bridge_fused_sweep(
         random_paths[control_index] = score_path
     bridge_paths: dict[float | tuple[float, str], Path] = {}
     source = bridge_score_source.strip().lower()
-    if source not in {"bridge_fused", "bridge_gated", "policy_fused", "policy_safe"}:
-        raise ValueError("bridge_score_source must be 'bridge_fused', 'bridge_gated', 'policy_fused', or 'policy_safe'.")
+    if source not in {"bridge_fused", "bridge_gated", "pairwise_bridge_fused", "policy_fused", "policy_safe"}:
+        raise ValueError(
+            "bridge_score_source must be 'bridge_fused', 'bridge_gated', 'pairwise_bridge_fused', 'policy_fused', or 'policy_safe'."
+        )
     risk_head: ArtifactRiskHead | None = None
     for weight in bridge_fused_weights:
         score_path = out_dir / f"scores_{source}_{_weight_label(weight)}.csv"
@@ -571,6 +574,16 @@ def run_bridge_fused_sweep(
                 card_top_k=card_top_k,
                 blend_with_stats_weight=weight,
                 blend_mode="gated" if source == "bridge_gated" else "linear",
+            )
+        elif source == "pairwise_bridge_fused":
+            bridge_rows = build_pairwise_bridge_score_rows(
+                bundle,
+                bridge_input_dir=bridge_input_dir,
+                alpha=bridge_alpha,
+                exclude_datasets=bridge_exclude_datasets,
+                split_name="train",
+                card_top_k=card_top_k,
+                blend_with_stats_weight=weight,
             )
         else:
             bridge_rows = build_policy_score_rows(
@@ -862,7 +875,11 @@ def main() -> None:
     parser.add_argument("--top-k", nargs="*")
     parser.add_argument("--bridge-fused-weights", nargs="*")
     parser.add_argument("--support-variant", action="append", default=[])
-    parser.add_argument("--bridge-score-source", choices=["bridge_fused", "bridge_gated", "policy_fused", "policy_safe"], default="bridge_fused")
+    parser.add_argument(
+        "--bridge-score-source",
+        choices=["bridge_fused", "bridge_gated", "pairwise_bridge_fused", "policy_fused", "policy_safe"],
+        default="bridge_fused",
+    )
     parser.add_argument("--bridge-alpha", type=float, default=10.0)
     parser.add_argument("--bridge-exclude-dataset", action="append", default=["waterbirds"])
     parser.add_argument("--policy-input-dir", default="outputs/dfr_sweeps/llm_clue_fixture_experiments_20260502_refreshed")

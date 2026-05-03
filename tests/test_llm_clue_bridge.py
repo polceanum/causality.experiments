@@ -20,7 +20,7 @@ from causality_experiments.rl_clue_policy import (
 )
 from scripts.run_llm_counterfactual_clue_probe import run_llm_counterfactual_clue_probe
 from scripts.train_llm_clue_policy import run_clue_policy_training
-from scripts.train_llm_clue_bridge_ranker import run_bridge_ranker
+from scripts.train_llm_clue_bridge_ranker import fit_pairwise_bridge_ranker_from_runs, run_bridge_ranker, score_pairwise_bridge_packets
 
 
 def _write_waterbirds_features(path: Path) -> None:
@@ -350,7 +350,43 @@ def test_bridge_ranker_evaluates_heldout_packet_candidates(tmp_path: Path) -> No
 
     assert (tmp_path / "ranker.csv").exists()
     bridge = next(row for row in summary["by_label_top_k"] if row["label"] == "bridge_ranker")
+    pairwise = next(row for row in summary["by_label_top_k"] if row["label"] == "pairwise_bridge_ranker")
+    fused = next(row for row in summary["by_label_top_k"] if row["label"] == "pairwise_stats_fused_w0.3")
     assert bridge["mean_causal_target"] == 1.0
+    assert pairwise["mean_causal_target"] == 1.0
+    assert fused["mean_causal_target"] == 1.0
+
+    model = fit_pairwise_bridge_ranker_from_runs(root, alpha=10.0)
+    scores = score_pairwise_bridge_packets(
+        [
+            {
+                "feature_index": 0,
+                "feature_name": "feature_good",
+                "label_corr": 0.9,
+                "env_corr": 0.1,
+                "corr_margin": 0.8,
+                "abs_corr_margin": 0.8,
+                "uncertainty": 0.1,
+                "top_group_entropy": 0.2,
+                "label_env_disentanglement": 0.8,
+            },
+            {
+                "feature_index": 1,
+                "feature_name": "feature_bad",
+                "label_corr": 0.1,
+                "env_corr": 0.8,
+                "corr_margin": -0.7,
+                "abs_corr_margin": 0.7,
+                "uncertainty": 0.9,
+                "top_group_entropy": 0.8,
+                "label_env_disentanglement": 0.1,
+            },
+        ],
+        model,
+    )
+    by_feature = {row["feature_name"]: float(row["score"]) for row in scores}
+    assert model.train_pair_count > 0
+    assert by_feature["feature_good"] > by_feature["feature_bad"]
 
 
 def test_offline_clue_policy_evaluates_heldout_packet_candidates(tmp_path: Path) -> None:

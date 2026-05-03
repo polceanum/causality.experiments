@@ -165,6 +165,34 @@ signals. Keep this focused on what was tried and what was learned.
   active-boundary test signal rather than spending downstream compute on these
   first risk variants.
 
+## 2026-05-03: Pairwise Bridge Supervision
+
+- Extended `scripts/train_llm_clue_bridge_ranker.py` with a pairwise ridge
+  ranker. It compares trace rows within the replay corpus, trains on feature
+  differences weighted by target deltas, and reports `pairwise_bridge_ranker`
+  plus conservative `pairwise_stats_fused_w*` rows in the existing
+  leave-one-fixture-out evaluator.
+- Added reusable Waterbirds score-row support for `pairwise_bridge` and
+  `pairwise_bridge_fused`, and let the paired official/stat/random sweep
+  evaluate `pairwise_bridge_fused` with the same controls as the incumbent
+  bridge-fused source.
+- Refreshed fixture held-out evaluation: raw pairwise improved scalar bridge at
+  top-1 (`0.375` versus `0.25`) but stayed below stats (`0.625`). Conservative
+  pairwise/stat fusion preserved stats top-1; `pairwise_stats_fused_w0.3`
+  improved top-2/top-4 recovery to `0.375`/`0.34375`, versus stats at
+  `0.3125`/`0.28125`.
+- Compact Waterbirds paired screens at top-512 did not promote. With two seeds,
+  five retrains, and three deterministic random controls,
+  `pairwise_bridge_fused_w0.3` averaged WGA `0.9334787428`, with mean deltas
+  `+0.0007788241` to official DFR, `-0.0005515516` to stats, and
+  `-0.0008869171` to the best random control. Nearby weights were also below
+  stats/best-random: `w0.1` mean WGA `0.9333651066`, `w0.5` mean WGA
+  `0.9326999187`.
+- Interpretation: pairwise supervision is a better diagnostic framing than raw
+  scalar bridge regression, but the first version does not improve the
+  benchmark-facing support. Keep it as infrastructure and move next to stronger
+  active-boundary evidence or richer listwise/query grouping.
+
 ## 2026-04-22
 
 - Read the source document, which is a survey and experiment blueprint rather

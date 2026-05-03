@@ -245,6 +245,22 @@ issues unless they invalidate an experimental result.
     do not spend downstream benchmark budget on the current variants. Move to
     pairwise/listwise supervision or stronger active-boundary tests.
 
+- **First pairwise bridge ranker as an immediate Waterbirds margin widener**
+  - Attempt: train a pairwise ridge bridge ranker from within-run replay-trace
+    comparisons, fuse it conservatively with stats, and evaluate the resulting
+    `pairwise_bridge_fused` scores through the official causal-shrink
+    Waterbirds consumer.
+  - Result: held-out fixture diagnostics improved over the scalar bridge at
+    top-1 and improved stats at top-2/top-4 when fused, but compact Waterbirds
+    screens for weights `0.1`, `0.3`, and `0.5` all trailed stats and the best
+    deterministic random control on mean.
+  - Interpretation: pairwise supervision is a useful training/evaluation
+    substrate, but the current trace targets and feature surface still do not
+    identify better top-512 Waterbirds replacements.
+  - Action: do not full-budget promote these pairwise-fused variants. Keep the
+    evaluator and score source, and only revisit after adding stronger
+    active-boundary tests or richer listwise/query-level supervision.
+
 - **Activation-gap fields as bridge-ranker features**
   - Attempt: add activation label/environment gaps and alignment one-hot fields
     to bridge training rows and the ridge ranker, then refresh the offline

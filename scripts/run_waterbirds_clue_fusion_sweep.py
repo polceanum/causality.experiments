@@ -29,11 +29,26 @@ from causality_experiments.latent_clue_packets import build_latent_clue_packets
 from causality_experiments.rl_clue_policy import build_clue_reward_rows, score_policy_packets, train_offline_clue_policy
 from causality_experiments.run import run_experiment
 from scripts.report_clue_source_ablation import summarize_source_ablation
-from scripts.train_llm_clue_bridge_ranker import fit_bridge_ranker_from_runs, score_bridge_packets
+from scripts.train_llm_clue_bridge_ranker import (
+    fit_bridge_ranker_from_runs,
+    fit_pairwise_bridge_ranker_from_runs,
+    score_bridge_packets,
+    score_pairwise_bridge_packets,
+)
 
 
 DEFAULT_SOURCE_LABELS = ("stats", "language", "image", "fused")
-SOURCE_LABELS = (*DEFAULT_SOURCE_LABELS, "bridge", "bridge_fused", "bridge_gated", "policy", "policy_fused", "policy_safe")
+SOURCE_LABELS = (
+    *DEFAULT_SOURCE_LABELS,
+    "bridge",
+    "bridge_fused",
+    "bridge_gated",
+    "pairwise_bridge",
+    "pairwise_bridge_fused",
+    "policy",
+    "policy_fused",
+    "policy_safe",
+)
 
 
 def _safe_float(row: dict[str, Any], key: str) -> float:
@@ -215,6 +230,40 @@ def build_bridge_score_rows(
         blended["rank_score"] = f"{score:.6f}"
         blended["score"] = f"{score:.6f}"
         blended["score_source"] = score_source
+        blended_rows.append(blended)
+    return blended_rows
+
+
+def build_pairwise_bridge_score_rows(
+    bundle: Any,
+    *,
+    bridge_input_dir: Path,
+    alpha: float = 10.0,
+    exclude_datasets: list[str] | None = None,
+    split_name: str = "train",
+    card_top_k: int = 16,
+    blend_with_stats_weight: float | None = None,
+) -> list[dict[str, str]]:
+    packets = build_latent_clue_packets(bundle, split_name=split_name, top_k=card_top_k)
+    model = fit_pairwise_bridge_ranker_from_runs(
+        bridge_input_dir,
+        alpha=alpha,
+        exclude_datasets=exclude_datasets,
+    )
+    rows = score_pairwise_bridge_packets(packets, model)
+    if blend_with_stats_weight is None:
+        return [dict(row, score_source="pairwise_bridge") for row in rows]
+    pairwise_values = _normalise_scores([_safe_float(row, "score") for row in rows])
+    weight = min(max(float(blend_with_stats_weight), 0.0), 1.0)
+    blended_rows: list[dict[str, str]] = []
+    for row, packet, pairwise_value in zip(rows, packets, pairwise_values, strict=True):
+        stats_score = _sigmoid(6.0 * _safe_float(packet, "corr_margin"))
+        score = (1.0 - weight) * stats_score + weight * pairwise_value
+        blended = dict(row)
+        blended["support_score"] = f"{score:.6f}"
+        blended["rank_score"] = f"{score:.6f}"
+        blended["score"] = f"{score:.6f}"
+        blended["score_source"] = "pairwise_bridge_fused"
         blended_rows.append(blended)
     return blended_rows
 
@@ -410,7 +459,7 @@ def main() -> None:
     parser.add_argument("--dataset-path", default="", help="Optional feature CSV path override for the base config dataset.")
     parser.add_argument("--split", default="train")
     parser.add_argument("--top-k", type=int, action="append", default=[], help="Top-k to summarize/run. Can be passed multiple times.")
-    parser.add_argument("--sources", action="append", default=[], help="Source label(s) to emit/run: stats, language, image, fused, bridge, bridge_fused, bridge_gated, policy, policy_fused, policy_safe. Can be comma-separated or repeated.")
+    parser.add_argument("--sources", action="append", default=[], help="Source label(s) to emit/run: stats, language, image, fused, bridge, bridge_fused, bridge_gated, pairwise_bridge, pairwise_bridge_fused, policy, policy_fused, policy_safe. Can be comma-separated or repeated.")
     parser.add_argument("--out-dir", default="outputs/dfr_sweeps/clue_fusion", help="Directory for cards, clues, scores, ablations, and optional downstream rows.")
     parser.add_argument("--card-top-k", type=int, default=16, help="Top and bottom activation count per feature card.")
     parser.add_argument("--bridge-input-dir", default="outputs/dfr_sweeps/llm_clue_fixture_experiments", help="Fixture trace directory used when source=bridge.")
@@ -471,6 +520,16 @@ def main() -> None:
                 card_top_k=args.card_top_k,
                 blend_with_stats_weight=float(args.bridge_fused_weight) if source in {"bridge_fused", "bridge_gated"} else None,
                 blend_mode="gated" if source == "bridge_gated" else "linear",
+            )
+        elif source in {"pairwise_bridge", "pairwise_bridge_fused"}:
+            rows = build_pairwise_bridge_score_rows(
+                bundle,
+                bridge_input_dir=Path(args.bridge_input_dir),
+                alpha=float(args.bridge_alpha),
+                exclude_datasets=_unique_strings(list(args.bridge_exclude_dataset)),
+                split_name=args.split,
+                card_top_k=args.card_top_k,
+                blend_with_stats_weight=float(args.bridge_fused_weight) if source == "pairwise_bridge_fused" else None,
             )
         elif source in {"policy", "policy_fused", "policy_safe"}:
             rows = build_policy_score_rows(
