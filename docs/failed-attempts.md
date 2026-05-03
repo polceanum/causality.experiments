@@ -303,6 +303,22 @@ issues unless they invalidate an experimental result.
   - Action: stop split-ensembling this exact scorer. Next boundary work should
     use paired replacement evaluation or add an explicit env-risk constraint.
 
+- **Env-guarded model-effect active boundary as a promotion candidate**
+  - Attempt: subtract shortcut-risk evidence from the model-effect boundary
+    scorer so boundary replacements are both downstream-aware and constrained
+    against env-dominant features.
+  - Result: support diagnostics and compact screening improved: only `5/512`
+    support replacements, env-dominant selected features `5 -> 4`, compact mean
+    WGA `0.9355` versus incumbent `0.9353`, and all compact gates cleared.
+    However, the five-seed 50-retrain promotion screen averaged `0.9358`, below
+    the incumbent `0.9368`, and failed stats/best-random on seed 104.
+  - Interpretation: the env guard is a useful boundary guardrail, but the fixed
+    correlation penalty is not enough to choose replacements that generalize
+    across the full paired gate.
+  - Action: do not promote this variant. Keep it as the strongest boundary
+    diagnostic so far; next work should score paired replacements directly or
+    learn the guard from downstream paired outcomes.
+
 - **Activation-gap fields as bridge-ranker features**
   - Attempt: add activation label/environment gaps and alignment one-hot fields
     to bridge training rows and the ridge ranker, then refresh the offline

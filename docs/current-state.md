@@ -331,6 +331,15 @@ Decision:
   `active_boundary_model_effect_ensemble` produced the same top-512 support and
   the same compact metrics, so the issue is not only split noise. Keep the
   hook, but do not promote this scorer family.
+- `active_boundary_model_effect_env_guard` adds a shortcut-risk penalty to the
+  model-effect boundary signal. It is the most useful boundary diagnostic so
+  far: support changes are restrained (`5/512` replacements) and env-dominant
+  selected features drop from `5` to `4`. A compact two-seed screen beat the
+  incumbent on mean (`0.9354743063` versus `0.9352525771`) and cleared
+  stats/best-random on both seeds, but the five-seed 50-retrain promotion
+  screen did not promote. Full mean WGA was `0.9357854962`, below incumbent
+  `0.9367601395`, with one negative stats/best-random seed. Keep it as the
+  best boundary guardrail, not the active candidate.
 
 ### Clue Fusion and Discovery Masks
 
@@ -432,6 +441,10 @@ Decision:
    - Do not spend more compact screens on split-ensembling the same
      model-effect boundary score alone; the first ensemble produced identical
      support and metrics to the single-probe scorer.
+   - Do not full-budget promote the env-guarded model-effect boundary variant.
+     It is the best restrained boundary diagnostic so far and has compact
+     upside, but the five-seed 50-retrain gate trails the incumbent and fails
+     one stats/best-random seed.
    - Do not re-add raw activation-gap fields directly without a versioned corpus
      and held-out win.
 

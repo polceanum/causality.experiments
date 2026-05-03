@@ -262,6 +262,34 @@ signals. Keep this focused on what was tried and what was learned.
   an explicit env-risk guard, or a different downstream-aware target rather
   than averaging the same ablation signal.
 
+## 2026-05-03: Env-Guarded Model-Effect Boundary
+
+- Added `active_boundary_model_effect_env_guard`, which keeps the model-effect
+  boundary ablation signal but subtracts shortcut risk from boundary evidence
+  before normalization. The goal was to preserve the downstream-aware probe
+  target while avoiding the env-dominant replacements admitted by the raw
+  model-effect scorer.
+- Support diagnostics looked much better than the raw model-effect variants:
+  refreshed Waterbirds `bridge_fused/w0.3/top512` overlap was `507/512`
+  (`0.9807` Jaccard), so only `5/512` features changed, and env-dominant
+  selected features dropped from `5` to `4`. This is the first active-boundary
+  scorer that is both nontrivial and restrained.
+- Compact paired two-seed, five-retrain screen was encouraging. The env-guarded
+  variant averaged WGA `0.9354743063`, slightly above incumbent compact
+  `0.9352525771`, with mean deltas `+0.0027743876` to official DFR,
+  `+0.0014440119` to stats, and `+0.0011086464` to the best random control. It
+  was non-negative on `2/2` seeds for all gates.
+- Full five-seed, 50-retrain promotion screen did not promote. Incumbent
+  `bridge_fused/w0.3/top512` averaged WGA `0.9367601395`; env-guarded boundary
+  averaged `0.9357854962`. The guarded variant stayed positive versus official
+  DFR on all seeds but failed stats and best-random on seed 104, with minimum
+  deltas `-0.0033155680` to stats and `-0.0048732162` to best random.
+- Interpretation: an explicit env guard is the right direction for boundary
+  edits, but the current local penalty mostly recovers the incumbent support
+  and still harms one high-variance seed. Future work should evaluate paired
+  replacements directly or learn an env guard from downstream paired outcomes,
+  rather than relying on a fixed correlation penalty.
+
 ## 2026-04-22
 
 - Read the source document, which is a survey and experiment blueprint rather

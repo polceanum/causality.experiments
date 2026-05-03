@@ -501,6 +501,7 @@ def build_active_boundary_model_effect_score_rows(
     probe_seed: int = 17,
     probe_seeds: tuple[int, ...] | None = None,
     eval_fraction: float = 0.35,
+    env_risk_weight: float = 0.0,
     score_source: str = "active_boundary_model_effect",
 ) -> list[dict[str, str]]:
     if top_k <= 0:
@@ -587,6 +588,14 @@ def build_active_boundary_model_effect_score_rows(
         name: tuple(float(value) for value in values / denominator)
         for name, values in detail_sums.items()
     }
+    clues_by_feature = {str(row.get("feature_name", "")): row for row in clue_rows}
+    env_risk_by_feature: dict[str, float] = {}
+    if env_risk_weight > 0.0:
+        for name in raw_evidence:
+            clue = clues_by_feature.get(name, {})
+            env_risk = max(0.0, _safe_float(clue, "env_corr") - _safe_float(clue, "label_corr"))
+            env_risk_by_feature[name] = env_risk
+            raw_evidence[name] -= float(env_risk_weight) * env_risk
     if raw_evidence:
         low = min(raw_evidence.values())
         high = max(raw_evidence.values())
@@ -608,6 +617,7 @@ def build_active_boundary_model_effect_score_rows(
         updated["active_boundary_wga_effect"] = f"{wga_effect:.6f}"
         updated["active_boundary_loss_effect"] = f"{loss_effect:.6f}"
         updated["active_boundary_coef_effect"] = f"{coef_effect:.6f}"
+        updated["active_boundary_env_risk"] = f"{env_risk_by_feature.get(name, 0.0):.6f}"
         updated["support_score"] = f"{score:.6f}"
         updated["rank_score"] = f"{score:.6f}"
         updated["score"] = f"{score:.6f}"
@@ -617,7 +627,12 @@ def build_active_boundary_model_effect_score_rows(
 
 
 def _is_active_boundary_variant(variant_key: str) -> bool:
-    return variant_key in {"active_boundary", "active_boundary_model_effect", "active_boundary_model_effect_ensemble"}
+    return variant_key in {
+        "active_boundary",
+        "active_boundary_model_effect",
+        "active_boundary_model_effect_ensemble",
+        "active_boundary_model_effect_env_guard",
+    }
 
 
 def build_support_variant_score_rows(
@@ -873,18 +888,30 @@ def run_bridge_fused_sweep(
                     "active_boundary",
                     "active_boundary_model_effect",
                     "active_boundary_model_effect_ensemble",
+                    "active_boundary_model_effect_env_guard",
                 }:
                     raise ValueError(
                         "support variants must be one of: env_filter, margin_gate, stats_fill, "
                         "soft_env_penalty, stats_anchor, score_sqrt, score_square, constrained_support, "
                         "constrained_support_strict, constrained_support_loose, constrained_support_bridge, "
                         "artifact_risk, artifact_risk_boundary, active_boundary, active_boundary_model_effect, "
-                        "active_boundary_model_effect_ensemble."
+                        "active_boundary_model_effect_ensemble, active_boundary_model_effect_env_guard."
                     )
                 if _is_active_boundary_variant(variant_key):
                     for top_k in top_k_values:
                         variant_path = out_dir / f"scores_{source}_{_weight_label(weight)}_{variant_key}_top{top_k}.csv"
-                        if variant_key == "active_boundary_model_effect_ensemble":
+                        if variant_key == "active_boundary_model_effect_env_guard":
+                            variant_rows = build_active_boundary_model_effect_score_rows(
+                                bundle=bundle,
+                                clue_rows=clue_rows,
+                                candidate_rows=bridge_rows,
+                                top_k=top_k,
+                                boundary_fraction=0.15,
+                                evidence_weight=0.35,
+                                env_risk_weight=0.50,
+                                score_source="active_boundary_model_effect_env_guard",
+                            )
+                        elif variant_key == "active_boundary_model_effect_ensemble":
                             variant_rows = build_active_boundary_model_effect_score_rows(
                                 bundle=bundle,
                                 clue_rows=clue_rows,
