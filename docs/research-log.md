@@ -336,6 +336,27 @@ signals. Keep this focused on what was tried and what was learned.
   conservative penalty for compact-only positives that have not survived the
   five-seed 50-retrain gate.
 
+## 2026-05-03: Conservative Replacement Acceptor
+
+- Added `scripts/train_waterbirds_replacement_acceptor.py`, a small ridge-based
+  acceptor over replacement-calibration rows. Its target is the worst mean
+  margin to stats and best-random controls. It reports leave-one-out
+  predictions, subtracts residual uncertainty from fitted predictions, and only
+  recommends rows that both clear gates and have enough paired outcomes.
+- On the compact-only nine-row table, the raw conservative score still ranked
+  small-change compact wins highest, which exposed the main failure mode: compact
+  positives are not actionable labels. Tightened the acceptor with a default
+  `min_outcome_count=5`, matching the promotion seed count.
+- Built a promotion-aware table with full-gate `env_filter` and
+  `active_boundary_model_effect_env_guard` rows plus compact-only diagnostics.
+  The acceptor recommended no interventions. `env_filter` and env-guard kept
+  positive mean worst-control margins, but both failed at least one full gate;
+  compact-only rows were blocked by the outcome-count requirement.
+- Interpretation: this is a principled negative result and a useful guardrail.
+  Current evidence says do not alter `bridge_fused/w0.3/top512`; future support
+  edits should first add full-gate outcome labels to the calibration table, then
+  pass this conservative acceptor before any promotion claim.
+
 ## 2026-04-22
 
 - Read the source document, which is a survey and experiment blueprint rather

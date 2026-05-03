@@ -359,6 +359,15 @@ Decision:
   `env_filter`/`stats_fill` look best in compact but already failed full
   promotion, so future acceptors need full-gate labels or conservative
   compact-to-full uncertainty penalties.
+- `scripts/train_waterbirds_replacement_acceptor.py` trains a tiny conservative
+  downstream-calibrated acceptor over the calibration table. It predicts the
+  worst mean margin to stats/best-random, subtracts leave-one-out residual
+  uncertainty, and refuses recommendations without enough paired outcomes. On a
+  promotion-aware table containing full-gate `env_filter` and env-guard rows,
+  it recommends no intervention: both full rows keep positive mean margins but
+  fail at least one promotion gate, while compact-only rows are evidence but
+  not actionable. This is the desired stop behavior; keep the incumbent support
+  unless a future candidate clears the calibrated full-gate acceptor.
 
 ### Clue Fusion and Discovery Masks
 
