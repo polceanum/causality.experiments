@@ -60,6 +60,11 @@ def _metric_payload(run_dir: Path) -> dict[str, float]:
     return dict(payload["metrics"])
 
 
+def _read_csv_rows(path: Path) -> list[dict[str, str]]:
+    with path.open(encoding="utf-8", newline="") as handle:
+        return list(csv.DictReader(handle))
+
+
 def _stable_random_score(*, control_index: int, feature_index: str, feature_name: str) -> float:
     payload = f"{control_index}:{feature_index}:{feature_name}".encode("utf-8")
     digest = hashlib.sha256(payload).hexdigest()[:16]
@@ -807,7 +812,175 @@ def _is_active_boundary_variant(variant_key: str) -> bool:
         "active_boundary_model_effect_ensemble",
         "active_boundary_model_effect_env_guard",
         "active_boundary_paired_replacement",
+        "calibrated_micro_replacement",
     }
+
+
+def _top_feature_names(rows: list[dict[str, str]], top_k: int) -> list[str]:
+    return [row["feature_name"] for row in sorted(rows, key=lambda row: _safe_float(row, "score"), reverse=True)[:top_k]]
+
+
+def _support_stats(names: set[str], clues_by_feature: dict[str, dict[str, Any]]) -> dict[str, float]:
+    rows = [clues_by_feature.get(name, {}) for name in sorted(names)]
+    label_corr = [_safe_float(row, "label_corr") for row in rows]
+    env_corr = [_safe_float(row, "env_corr") for row in rows]
+    corr_margin = [_safe_float(row, "corr_margin") for row in rows]
+    return {
+        "count": float(len(names)),
+        "env_ge_label_count": float(sum(env >= label for label, env in zip(label_corr, env_corr, strict=True))),
+        "mean_label_corr": statistics.mean(label_corr) if label_corr else 0.0,
+        "mean_env_corr": statistics.mean(env_corr) if env_corr else 0.0,
+        "mean_corr_margin": statistics.mean(corr_margin) if corr_margin else 0.0,
+    }
+
+
+def _support_feature_row(
+    *,
+    reference_names: set[str],
+    selected_names: set[str],
+    clues_by_feature: dict[str, dict[str, Any]],
+    top_k: int,
+) -> dict[str, str]:
+    entered = selected_names - reference_names
+    left = reference_names - selected_names
+    union = selected_names | reference_names
+    candidate_stats = _support_stats(selected_names, clues_by_feature)
+    entered_stats = _support_stats(entered, clues_by_feature)
+    left_stats = _support_stats(left, clues_by_feature)
+    row: dict[str, str] = {
+        "changed_fraction": str(len(entered) / max(int(top_k), 1)),
+        "jaccard_with_reference": str(0.0 if not union else len(selected_names & reference_names) / len(union)),
+        "accepted_pair_count": "0",
+        "mean_accepted_pair_delta": "0",
+        "max_accepted_pair_delta": "0",
+    }
+    for prefix, stats in (("candidate", candidate_stats), ("entered", entered_stats), ("left", left_stats)):
+        for key, value in stats.items():
+            row[f"{prefix}_{key}"] = str(value)
+    return row
+
+
+def _calibrated_predictions(
+    *,
+    calibration_path: Path,
+    candidate_feature_rows: list[dict[str, str]],
+    alpha: float,
+    uncertainty_scale: float,
+) -> tuple[list[float], list[float]]:
+    from scripts.train_waterbirds_replacement_acceptor import (
+        _feature_matrix,
+        _predict_with_training_stats,
+        _target,
+        leave_one_out_predictions,
+    )
+
+    if not calibration_path.exists() or not candidate_feature_rows:
+        return [0.0 for _ in candidate_feature_rows], [0.0 for _ in candidate_feature_rows]
+    calibration_rows = _read_csv_rows(calibration_path)
+    if not calibration_rows:
+        return [0.0 for _ in candidate_feature_rows], [0.0 for _ in candidate_feature_rows]
+    x_train = _feature_matrix(calibration_rows)
+    y_train = np.asarray([_target(row) for row in calibration_rows], dtype=np.float64)
+    x_eval = _feature_matrix(candidate_feature_rows)
+    predictions = _predict_with_training_stats(
+        x_train=x_train,
+        y_train=y_train,
+        x_eval=x_eval,
+        alpha=float(alpha),
+    )
+    loo = leave_one_out_predictions(calibration_rows, alpha=float(alpha))
+    residuals = np.asarray([target - pred for target, pred in zip(y_train, loo, strict=True)], dtype=np.float64)
+    residual_std = float(np.std(residuals)) if len(residuals) > 1 else 0.0
+    conservative = predictions - float(uncertainty_scale) * residual_std
+    return [float(value) for value in predictions], [float(value) for value in conservative]
+
+
+def build_calibrated_micro_replacement_score_rows(
+    *,
+    clue_rows: list[dict[str, Any]],
+    reference_rows: list[dict[str, str]],
+    challenger_rows: list[dict[str, str]],
+    calibration_path: Path,
+    top_k: int,
+    alpha: float = 5.0,
+    uncertainty_scale: float = 1.0,
+    max_changes: int = 2,
+) -> list[dict[str, str]]:
+    if top_k <= 0:
+        raise ValueError("top_k must be positive for calibrated micro replacement.")
+    reference_order = _top_feature_names(reference_rows, top_k)
+    challenger_order = _top_feature_names(challenger_rows, top_k)
+    reference_names = set(reference_order)
+    challenger_names = set(challenger_order)
+    entered_order = [name for name in challenger_order if name not in reference_names]
+    left_order = [name for name in reversed(reference_order) if name not in challenger_names]
+    clues_by_feature = {str(row.get("feature_name", "")): row for row in clue_rows}
+    candidate_sets: list[tuple[str, set[str]]] = [("no_change", set(reference_names))]
+    for count in range(1, min(int(max_changes), len(entered_order), len(left_order)) + 1):
+        selected = (reference_names - set(left_order[:count])) | set(entered_order[:count])
+        candidate_sets.append((f"top{count}", selected))
+    for entered in entered_order[: min(8, len(entered_order))]:
+        for left in left_order[: min(8, len(left_order))]:
+            selected = (reference_names - {left}) | {entered}
+            candidate_sets.append((f"{entered}_for_{left}", selected))
+
+    seen: set[frozenset[str]] = set()
+    unique_candidates: list[tuple[str, set[str]]] = []
+    for label, selected in candidate_sets:
+        key = frozenset(selected)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_candidates.append((label, selected))
+    feature_rows = [
+        _support_feature_row(
+            reference_names=reference_names,
+            selected_names=selected,
+            clues_by_feature=clues_by_feature,
+            top_k=top_k,
+        )
+        for _label, selected in unique_candidates
+    ]
+    predictions, conservative = _calibrated_predictions(
+        calibration_path=calibration_path,
+        candidate_feature_rows=feature_rows,
+        alpha=alpha,
+        uncertainty_scale=uncertainty_scale,
+    )
+    scored = list(zip(unique_candidates, feature_rows, predictions, conservative, strict=True))
+    changed_scored = [item for item in scored if item[1].get("entered_count") not in {None, "0", "0.0"}]
+    best = max(changed_scored or scored, key=lambda item: (item[3], item[2]))
+    selected_label, selected_names = best[0]
+    selected_rank = {name: index for index, name in enumerate([name for name in challenger_order if name in selected_names])}
+    for name in reference_order:
+        if name not in selected_rank and name in selected_names:
+            selected_rank[name] = len(selected_rank)
+    denominator = max(len(selected_rank), 1)
+    reference_by_feature = {row["feature_name"]: row for row in reference_rows}
+    challenger_by_feature = {row["feature_name"]: row for row in challenger_rows}
+    reference_norm = _normalise_score_map(reference_rows)
+    rows: list[dict[str, str]] = []
+    selected_prediction = best[2]
+    selected_conservative = best[3]
+    selected_changed = int(round(_safe_float(best[1], "entered_count")))
+    for row in reference_rows:
+        name = row["feature_name"]
+        source = challenger_by_feature.get(name, reference_by_feature.get(name, row))
+        if name in selected_rank:
+            score = 2.0 + (denominator - selected_rank[name]) / denominator
+        else:
+            score = 0.1 * reference_norm.get(name, 0.0)
+        updated = dict(source)
+        updated["calibrated_micro_label"] = selected_label
+        updated["calibrated_micro_changed_count"] = str(selected_changed)
+        updated["calibrated_micro_prediction"] = f"{selected_prediction:.6f}"
+        updated["calibrated_micro_conservative_score"] = f"{selected_conservative:.6f}"
+        updated["support_score"] = f"{score:.6f}"
+        updated["rank_score"] = f"{score:.6f}"
+        updated["score"] = f"{score:.6f}"
+        updated["score_source"] = "calibrated_micro_replacement"
+        rows.append(updated)
+    return rows
 
 
 def build_support_variant_score_rows(
@@ -1065,6 +1238,7 @@ def run_bridge_fused_sweep(
                     "active_boundary_model_effect_ensemble",
                     "active_boundary_model_effect_env_guard",
                     "active_boundary_paired_replacement",
+                    "calibrated_micro_replacement",
                 }:
                     raise ValueError(
                         "support variants must be one of: env_filter, margin_gate, stats_fill, "
@@ -1072,12 +1246,33 @@ def run_bridge_fused_sweep(
                         "constrained_support_strict, constrained_support_loose, constrained_support_bridge, "
                         "artifact_risk, artifact_risk_boundary, active_boundary, active_boundary_model_effect, "
                         "active_boundary_model_effect_ensemble, active_boundary_model_effect_env_guard, "
-                        "active_boundary_paired_replacement."
+                        "active_boundary_paired_replacement, calibrated_micro_replacement."
                     )
                 if _is_active_boundary_variant(variant_key):
                     for top_k in top_k_values:
                         variant_path = out_dir / f"scores_{source}_{_weight_label(weight)}_{variant_key}_top{top_k}.csv"
-                        if variant_key == "active_boundary_paired_replacement":
+                        if variant_key == "calibrated_micro_replacement":
+                            challenger_rows = build_active_boundary_model_effect_score_rows(
+                                bundle=bundle,
+                                clue_rows=clue_rows,
+                                candidate_rows=bridge_rows,
+                                top_k=top_k,
+                                boundary_fraction=0.15,
+                                evidence_weight=0.35,
+                                env_risk_weight=0.50,
+                                score_source="active_boundary_model_effect_env_guard",
+                            )
+                            variant_rows = build_calibrated_micro_replacement_score_rows(
+                                clue_rows=clue_rows,
+                                reference_rows=bridge_rows,
+                                challenger_rows=challenger_rows,
+                                calibration_path=Path("outputs/dfr_sweeps/waterbirds-replacement-calibration-promotion-aware.csv"),
+                                top_k=top_k,
+                                alpha=5.0,
+                                uncertainty_scale=1.0,
+                                max_changes=2,
+                            )
+                        elif variant_key == "active_boundary_paired_replacement":
                             variant_rows = build_active_boundary_paired_replacement_score_rows(
                                 bundle=bundle,
                                 clue_rows=clue_rows,

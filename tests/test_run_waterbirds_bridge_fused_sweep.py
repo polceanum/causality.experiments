@@ -121,6 +121,7 @@ def test_bridge_fused_sweep_reports_paired_deltas(tmp_path: Path, monkeypatch) -
             "active_boundary_model_effect_ensemble",
             "active_boundary_model_effect_env_guard",
             "active_boundary_paired_replacement",
+            "calibrated_micro_replacement",
         ],
         bridge_score_source="bridge_fused",
         bridge_alpha=10.0,
@@ -152,6 +153,7 @@ def test_bridge_fused_sweep_reports_paired_deltas(tmp_path: Path, monkeypatch) -
     assert "bridge_fused_w0p2_active_boundary_model_effect_ensemble_top1" in labels
     assert "bridge_fused_w0p2_active_boundary_model_effect_env_guard_top1" in labels
     assert "bridge_fused_w0p2_active_boundary_paired_replacement_top1" in labels
+    assert "bridge_fused_w0p2_calibrated_micro_replacement_top1" in labels
     assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_env_filter.csv").exists()
     assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_soft_env_penalty.csv").exists()
     assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_score_square.csv").exists()
@@ -163,6 +165,7 @@ def test_bridge_fused_sweep_reports_paired_deltas(tmp_path: Path, monkeypatch) -
     assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_active_boundary_model_effect_ensemble_top1.csv").exists()
     assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_active_boundary_model_effect_env_guard_top1.csv").exists()
     assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_active_boundary_paired_replacement_top1.csv").exists()
+    assert (tmp_path / "scores" / "scores_bridge_fused_w0p2_calibrated_micro_replacement_top1.csv").exists()
     random_summary = summary["random_controls"][0]
     assert random_summary["label"] == "random_score_0_top1"
 

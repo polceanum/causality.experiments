@@ -649,6 +649,7 @@ def _fit_official_logreg_raw(
     c_value: float,
     seed: int,
     feature_scale: np.ndarray | None = None,
+    sample_weight: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     scaler = StandardScaler()
     x_train_scaled = scaler.fit_transform(x_train)
@@ -664,7 +665,11 @@ def _fit_official_logreg_raw(
         max_iter=1000,
         random_state=seed,
     )
-    logreg.fit(x_train_scaled, y_train)
+    if sample_weight is not None:
+        sample_weight = np.asarray(sample_weight, dtype=np.float64)
+        if sample_weight.shape != (len(y_train),):
+            raise ValueError("sample_weight must match y_train length.")
+    logreg.fit(x_train_scaled, y_train, sample_weight=sample_weight)
     coef = np.asarray(logreg.coef_, dtype=np.float64)
     intercept = np.asarray(logreg.intercept_, dtype=np.float64)
     scale = np.asarray(scaler.scale_, dtype=np.float64)
@@ -674,6 +679,47 @@ def _fit_official_logreg_raw(
     raw_coef = effective_coef / scale[None, :]
     raw_intercept = intercept - (effective_coef * (mean / scale)[None, :]).sum(axis=1)
     return raw_coef, raw_intercept, mean, scale
+
+
+def _official_dfr_score_example_weights(
+    x_fit: np.ndarray,
+    bundle: DatasetBundle,
+    method: dict[str, Any],
+) -> np.ndarray | None:
+    strength = float(method.get("official_dfr_score_weight_strength", 0.0))
+    if abs(strength) <= 1e-12:
+        return None
+    values = (bundle.metadata or {}).get("causal_feature_scores")
+    if not values:
+        raise ValueError("official_dfr_score_weight_strength requires dataset metadata causal_feature_scores.")
+    scores = np.asarray(values, dtype=np.float64)
+    if scores.shape != (x_fit.shape[1],):
+        raise ValueError("causal_feature_scores must match DFR feature dimension.")
+    score_min = float(np.min(scores))
+    score_max = float(np.max(scores))
+    if score_max <= score_min + 1e-12:
+        raise ValueError("official_dfr_score_weight_strength requires non-constant causal_feature_scores.")
+    score_prior = (scores - score_min) / (score_max - score_min)
+    power = max(float(method.get("official_dfr_score_weight_power", 1.0)), 1e-6)
+    score_prior = np.power(score_prior, power)
+    prior_sum = float(np.sum(score_prior))
+    if prior_sum <= 1e-12:
+        return np.ones(len(x_fit), dtype=np.float64)
+    scaler = StandardScaler()
+    x_scaled = scaler.fit_transform(x_fit)
+    activation = np.abs(x_scaled) @ score_prior / prior_sum
+    low = float(np.min(activation))
+    high = float(np.max(activation))
+    if high <= low + 1e-12:
+        return np.ones(len(x_fit), dtype=np.float64)
+    normalized = (activation - low) / (high - low)
+    if str(method.get("official_dfr_score_weight_mode", "high")).strip().lower() in {"low", "inverse", "low_activation"}:
+        normalized = 1.0 - normalized
+    centered = normalized - float(np.mean(normalized))
+    weights = 1.0 + strength * centered
+    floor = min(max(float(method.get("official_dfr_score_weight_floor", 0.25)), 0.0), 1.0)
+    weights = np.maximum(weights, floor)
+    return weights / max(float(np.mean(weights)), 1e-12)
 
 
 def _official_dfr_c_grid(method: dict[str, Any]) -> list[float]:
@@ -1044,6 +1090,7 @@ def _fit_official_dfr_on_bundle(
         train_take = len(balanced_retrain_x)
         tune_fit_x = np.concatenate([train_x[:train_take], balanced_retrain_x], axis=0)
         tune_fit_y = np.concatenate([train_y[:train_take], balanced_retrain_y], axis=0)
+    tune_fit_weights = _official_dfr_score_example_weights(tune_fit_x, bundle, method)
 
     best_c = c_grid[0]
     best_feature_scale_label = float(feature_scale_grid[0][0])
@@ -1051,6 +1098,7 @@ def _fit_official_dfr_on_bundle(
     best_wga = float("-inf")
     best_tune_scaler_mean: list[float] | None = None
     best_tune_scaler_scale: list[float] | None = None
+    tune_candidates: list[dict[str, Any]] = []
     for feature_scale_label, feature_scale in feature_scale_grid:
         for c_value in c_grid:
             raw_coef, raw_intercept, scaler_mean, scaler_scale = _fit_official_logreg_raw(
@@ -1059,10 +1107,22 @@ def _fit_official_dfr_on_bundle(
                 c_value=c_value,
                 seed=seed,
                 feature_scale=feature_scale,
+                sample_weight=tune_fit_weights,
             )
             score = tune_x @ raw_coef.T + raw_intercept
             pred = (score[:, 0] > 0.0).astype(np.int64) if score.shape[1] == 1 else np.argmax(score, axis=1)
             worst_acc = _worst_group_accuracy_numpy(pred, tune_y, tune_g)
+            tune_candidates.append(
+                {
+                    "order": len(tune_candidates),
+                    "c_value": float(c_value),
+                    "feature_scale_label": float(feature_scale_label),
+                    "feature_scale": feature_scale,
+                    "tune_wga": float(worst_acc),
+                    "tune_scaler_mean": scaler_mean.tolist(),
+                    "tune_scaler_scale": scaler_scale.tolist(),
+                }
+            )
             if worst_acc > best_wga:
                 best_wga = worst_acc
                 best_c = c_value
@@ -1070,6 +1130,14 @@ def _fit_official_dfr_on_bundle(
                 best_feature_scale = feature_scale
                 best_tune_scaler_mean = scaler_mean.tolist()
                 best_tune_scaler_scale = scaler_scale.tolist()
+
+    ensemble_top_k = int(method.get("official_dfr_hyperparam_ensemble_top_k", 1))
+    if ensemble_top_k <= 0:
+        raise ValueError("official_dfr_hyperparam_ensemble_top_k must be positive.")
+    selected_tune_candidates = sorted(
+        tune_candidates,
+        key=lambda item: (-float(item["tune_wga"]), int(item["order"])),
+    )[:ensemble_top_k]
 
     raw_coefs: list[np.ndarray] = []
     raw_intercepts: list[np.ndarray] = []
@@ -1095,27 +1163,38 @@ def _fit_official_dfr_on_bundle(
             train_subset_idx = train_subset_idx[:train_take]
             fit_x = np.concatenate([train_x[train_subset_idx], final_x], axis=0)
             fit_y = np.concatenate([train_y[train_subset_idx], final_y], axis=0)
-        raw_coef, raw_intercept, scaler_mean, scaler_scale = _fit_official_logreg_raw(
-            fit_x,
-            fit_y,
-            c_value=best_c,
-            seed=seed + offset,
-            feature_scale=best_feature_scale,
-        )
-        raw_coefs.append(raw_coef)
-        raw_intercepts.append(raw_intercept)
-        retrain_details.append(
-            {
-                "val_indices": selected_val_idx.tolist(),
-                "val_group_counts": {
-                    int(group): int(np.sum(final_g == group))
-                    for group in sorted(int(group) for group in np.unique(final_g))
-                },
-                "train_indices": train_subset_idx.tolist(),
-                "scaler_mean": scaler_mean.tolist(),
-                "scaler_scale": scaler_scale.tolist(),
-            }
-        )
+        fit_weights = _official_dfr_score_example_weights(fit_x, bundle, method)
+        for hyperparam_rank, tune_candidate in enumerate(selected_tune_candidates):
+            raw_coef, raw_intercept, scaler_mean, scaler_scale = _fit_official_logreg_raw(
+                fit_x,
+                fit_y,
+                c_value=float(tune_candidate["c_value"]),
+                seed=seed + offset,
+                feature_scale=np.asarray(tune_candidate["feature_scale"], dtype=np.float64),
+                sample_weight=fit_weights,
+            )
+            raw_coefs.append(raw_coef)
+            raw_intercepts.append(raw_intercept)
+            retrain_details.append(
+                {
+                    "retrain_offset": int(offset),
+                    "hyperparam_rank": int(hyperparam_rank),
+                    "c_value": float(tune_candidate["c_value"]),
+                    "feature_scale_label": float(tune_candidate["feature_scale_label"]),
+                    "tune_wga": float(tune_candidate["tune_wga"]),
+                    "val_indices": selected_val_idx.tolist(),
+                    "val_group_counts": {
+                        int(group): int(np.sum(final_g == group))
+                        for group in sorted(int(group) for group in np.unique(final_g))
+                    },
+                    "train_indices": train_subset_idx.tolist(),
+                    "score_weight_mean": None if fit_weights is None else float(np.mean(fit_weights)),
+                    "score_weight_min": None if fit_weights is None else float(np.min(fit_weights)),
+                    "score_weight_max": None if fit_weights is None else float(np.max(fit_weights)),
+                    "scaler_mean": scaler_mean.tolist(),
+                    "scaler_scale": scaler_scale.tolist(),
+                }
+            )
 
     mean_weight = torch.tensor(np.mean(raw_coefs, axis=0), dtype=torch.float32)
     mean_bias = torch.tensor(np.mean(raw_intercepts, axis=0), dtype=torch.float32)
@@ -1130,6 +1209,20 @@ def _fit_official_dfr_on_bundle(
             "official_dfr_balance_val": balance_val,
             "official_dfr_add_train": add_train,
             "official_dfr_num_retrains": num_retrains,
+            "official_dfr_hyperparam_ensemble_top_k": ensemble_top_k,
+            "official_dfr_selected_hyperparams": [
+                {
+                    "rank": int(index),
+                    "c_value": float(item["c_value"]),
+                    "feature_scale_label": float(item["feature_scale_label"]),
+                    "tune_wga": float(item["tune_wga"]),
+                }
+                for index, item in enumerate(selected_tune_candidates)
+            ],
+            "official_dfr_score_weight_strength": float(method.get("official_dfr_score_weight_strength", 0.0)),
+            "official_dfr_score_weight_mode": str(method.get("official_dfr_score_weight_mode", "high")),
+            "official_dfr_tune_score_weight_min": None if tune_fit_weights is None else float(np.min(tune_fit_weights)),
+            "official_dfr_tune_score_weight_max": None if tune_fit_weights is None else float(np.max(tune_fit_weights)),
             "official_dfr_tune_val_indices": retrain_idx[balanced_retrain_idx].tolist(),
             "official_dfr_tune_val_group_counts": {
                 int(group): int(np.sum(balanced_retrain_g == group))

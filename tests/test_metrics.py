@@ -651,6 +651,94 @@ def test_official_dfr_val_tr_matches_direct_sklearn_retraining(tmp_path: Path) -
     assert direct_pred.tolist() == model_pred.tolist()
 
 
+def test_official_dfr_val_tr_can_weight_examples_by_feature_scores(tmp_path: Path) -> None:
+    csv_path = tmp_path / "features.csv"
+    rows = [
+        "split,y,place,group,feature_0,feature_1",
+        "train,0,0,0,-1.0,0.0",
+        "train,1,1,3,1.0,0.0",
+        "val,0,0,0,-3.0,0.0",
+        "val,0,0,0,-1.0,0.0",
+        "val,1,0,1,1.0,0.0",
+        "val,1,0,1,3.0,0.0",
+        "val,0,1,2,-2.0,0.0",
+        "val,0,1,2,-0.5,0.0",
+        "val,1,1,3,0.5,0.0",
+        "val,1,1,3,2.0,0.0",
+        "test,0,0,0,-2.0,0.0",
+        "test,1,1,3,2.0,0.0",
+    ]
+    csv_path.write_text("\n".join(rows), encoding="utf-8")
+    config = {
+        "seed": 5,
+        "dataset": {
+            "kind": "waterbirds_features",
+            "path": str(csv_path),
+            "causal_feature_columns": ["feature_0"],
+        },
+        "method": {
+            "kind": "official_dfr_val_tr",
+            "official_dfr_c_grid": [0.3],
+            "official_dfr_num_retrains": 1,
+            "official_dfr_balance_val": True,
+            "official_dfr_add_train": False,
+            "official_dfr_score_weight_strength": 1.0,
+        },
+    }
+
+    bundle = load_dataset(config)
+    model = fit_method(bundle, config)
+    details = model.details
+
+    assert details["official_dfr_score_weight_strength"] == 1.0
+    assert details["official_dfr_tune_score_weight_min"] < 1.0
+    assert details["official_dfr_tune_score_weight_max"] > 1.0
+    retrain = details["official_dfr_retrains"][0]
+    assert retrain["score_weight_min"] < 1.0
+    assert retrain["score_weight_max"] > 1.0
+
+
+def test_official_dfr_val_tr_can_ensemble_top_hyperparams(tmp_path: Path) -> None:
+    csv_path = tmp_path / "features.csv"
+    rows = [
+        "split,y,place,group,feature_0,feature_1",
+        "train,0,0,0,-1.0,0.0",
+        "train,1,1,3,1.0,0.0",
+        "val,0,0,0,-3.0,-0.5",
+        "val,0,0,0,-2.8,-0.4",
+        "val,1,0,1,2.8,0.4",
+        "val,1,0,1,3.0,0.5",
+        "val,0,1,2,-3.2,-0.6",
+        "val,0,1,2,-3.1,-0.5",
+        "val,1,1,3,3.1,0.5",
+        "val,1,1,3,3.2,0.6",
+        "test,0,0,0,-3.0,-0.5",
+        "test,1,1,3,3.0,0.5",
+    ]
+    csv_path.write_text("\n".join(rows), encoding="utf-8")
+    config = {
+        "seed": 5,
+        "dataset": {"kind": "waterbirds_features", "path": str(csv_path)},
+        "method": {
+            "kind": "official_dfr_val_tr",
+            "official_dfr_c_grid": [0.3, 1.0],
+            "official_dfr_num_retrains": 1,
+            "official_dfr_balance_val": True,
+            "official_dfr_add_train": False,
+            "official_dfr_hyperparam_ensemble_top_k": 2,
+        },
+    }
+
+    bundle = load_dataset(config)
+    model = fit_method(bundle, config)
+    details = model.details
+
+    assert details["official_dfr_hyperparam_ensemble_top_k"] == 2
+    assert len(details["official_dfr_selected_hyperparams"]) == 2
+    assert len(details["official_dfr_retrains"]) == 2
+    assert {row["hyperparam_rank"] for row in details["official_dfr_retrains"]} == {0, 1}
+
+
 def test_official_causal_shrink_identity_matches_official_dfr(tmp_path: Path) -> None:
     csv_path = tmp_path / "features.csv"
     rows = [

@@ -58,7 +58,7 @@ else:
             self.random_state = random_state
             self.class_weight = class_weight
 
-        def fit(self, x: np.ndarray, y: np.ndarray) -> "LogisticRegression":
+        def fit(self, x: np.ndarray, y: np.ndarray, sample_weight: np.ndarray | None = None) -> "LogisticRegression":
             x = np.asarray(x, dtype=np.float64)
             y = np.asarray(y, dtype=np.int64)
             classes = np.unique(y)
@@ -67,10 +67,12 @@ else:
             self.classes_ = classes
             positive = classes[1]
             y_bin = (y == positive).astype(np.float64)
-            sample_weight = np.ones(len(y_bin), dtype=np.float64)
+            sample_weight = np.ones(len(y_bin), dtype=np.float64) if sample_weight is None else np.asarray(sample_weight, dtype=np.float64)
+            if sample_weight.shape != (len(y_bin),):
+                raise ValueError("sample_weight must match the number of rows.")
             if self.class_weight:
                 for label, value in self.class_weight.items():
-                    sample_weight[y == label] = float(value)
+                    sample_weight[y == label] *= float(value)
             weight_sum = float(sample_weight.sum())
             l1_strength = 1.0 / max(self.C * weight_sum, 1e-12)
             lipschitz = 0.25 * float(np.linalg.norm(x, ord=2) ** 2) / max(len(x), 1)

@@ -3,6 +3,167 @@
 Chronological notes about experiments, implementation choices, and empirical
 signals. Keep this focused on what was tried and what was learned.
 
+## 2026-05-04: Bridge Package and Object-Proxy Representation Gate
+
+- Added `scripts/package_waterbirds_bridge_incumbent.py`, which combines the
+  existing candidate report, support report, and critical audit into a durable
+  JSON/Markdown package for `bridge_fused_w0p3_top512`. The package records
+  headline WGA/delta metrics, seed rows, support composition, artifact SHA256s,
+  reproduction commands, and cautious claim language. Generated artifacts:
+  `outputs/dfr_sweeps/waterbirds-bridge-incumbent-package.json` and `.md`.
+- Added `feature_decomposition: object_proxy` to Waterbirds feature extraction.
+  It uses a deterministic image-derived foreground proxy from border color
+  contrast, center prior, and edge score, then exports `full`, `foreground`,
+  `background`, and `foreground_minus_background` components through the
+  existing multi-view DFR-compatible feature path. This is a cheap object-aware
+  proxy, not a true segmentation model.
+- Ran frozen local DINOv2-small, limit384, seed `101`, unchanged official DFR.
+  Raw object-proxy all-component WGA was weak at `0.8125`.
+- Ran component subsets on that object-proxy table. The best subset was
+  `full + foreground_minus_background`, WGA `0.90625` with five retrains, and
+  it held at WGA `0.90625` under 50 retrains. This is stable but only matches
+  the previous hand-designed component ceiling, so do not escalate the
+  deterministic object-proxy decomposition to no-limit extraction.
+- Added `scripts/run_waterbirds_component_adapter_gate.py`, a learned component
+  adapter gate that trains the existing clue-prior adapter plus shuffled-prior
+  random controls and evaluates every output via unchanged official DFR. On the
+  object-proxy DINOv2 limit384 artifact, the clue adapter, raw table, and three
+  shuffled-prior controls all tied at WGA `0.8125`. Stop this first learned
+  adapter on the object-proxy artifact.
+- Validation after these additions: full local suite passed at `193 passed`.
+
+## 2026-05-04: Patch-Token Selector Recipe Search
+
+- Added three Hugging Face patch component selector recipes to
+  `scripts/prepare_waterbirds_features.py`: `hf_patch_cls_norm_components`
+  combines CLS cosine similarity and token norm, `hf_patch_residual_norm_components`
+  ranks patches by distance from the CLS token, and
+  `hf_patch_center_norm_components` combines token norm with a spatial center
+  prior. All three keep the same exported component contract: `cls`,
+  `foreground`, `background`, and `foreground_minus_background`.
+- Ran the bounded limit384 DINOv2-small seed-101 screen with unchanged official
+  DFR. Raw all-component WGA was `0.84375` for `cls_norm`, `0.875` for
+  `residual_norm`, and `0.84375` for `center_norm`.
+- Ran all-subset DFR screens for each new selector. The best `cls_norm` subset
+  was `cls + foreground` at WGA `0.90625`; the best `residual_norm` subset was
+  `background + cls` at WGA `0.90625`; the best `center_norm` subset reached
+  only WGA `0.875`.
+- Ran 50-retrain stability checks on the two best new subsets. Both held at WGA
+  `0.90625`: `residual_norm/background + cls` and `cls_norm/cls + foreground`.
+  This matches the earlier patch-norm limit384 subset ceiling but does not beat
+  it, so do not escalate these selector recipes to no-limit extraction or seed
+  sweeps.
+
+## 2026-05-04: Full Patch-Norm Component Subset Sweep
+
+- Added `scripts/run_waterbirds_component_subset_sweep.py`, a reusable cached
+  component-subset runner. It reads component groups from a feature manifest,
+  materializes subset feature CSVs with the existing component artifact builder,
+  runs unchanged official DFR, and writes ranked CSV/JSON summaries.
+- Ran the full cached patch token-norm DINOv2 component table,
+  `data/waterbirds/features_official_e0_lr0.001_envadv0_bhfppatchpnormpcomponents_wfacebookpdinov2psmall_evallocal_seed101.csv`,
+  across all non-empty proper component subsets with seed `101` and five
+  official DFR retrains. The best subset was again
+  `cls + foreground_minus_background`: WGA `0.9205607772`, raw all-component
+  WGA `0.9174454808`, delta `+0.0031152964`. `cls` alone was second at
+  `0.9190031290`; all subsets involving foreground/background without `cls`
+  were much weaker.
+- Ran a bounded 50-retrain stability check over `cls` and the `cls` pairs. The
+  signal did not grow into a benchmark path: raw all-component WGA was
+  `0.9065420628`, `cls` reached `0.9158878326`, and
+  `cls + foreground_minus_background` reached `0.9143302441`. This confirms a
+  real local component-selection effect but remains far below the official
+  feature comparator around `0.933`, so do not escalate to more seeds or new
+  extraction for this exact component family.
+
+## 2026-05-03: Component Representation Compiler Slice
+
+- Started the moonshot implementation path that moves LLM/clue evidence from
+  fixed-feature score reranking into representation supervision. Added
+  `causality_experiments.component_representation`, which infers component
+  groups from feature manifests or `feature_<component>_NNNN` naming, builds
+  component summary/clue/test rows, and trains a simple clue-weighted adapter
+  that exports DFR-compatible adapted feature CSVs.
+- Added `scripts/build_waterbirds_component_features.py` to materialize a
+  component feature artifact plus component clue, summary, and test CSVs from
+  an existing Waterbirds feature table. Added
+  `scripts/train_waterbirds_component_adapter.py` to train the first adapter
+  and write an adapted feature table, manifest, and report JSON.
+- Added focused tests in `tests/test_component_representation.py`. The toy
+  fixture puts label signal in foreground features and shortcut signal in
+  background features; component clues rank foreground higher, component tests
+  pass foreground against matched controls, and the adapter learns higher
+  weights for foreground than background while preserving train accuracy.
+- Real smoke on `data/waterbirds/features_official_erm_official_repro.csv`
+  found only a `global` component, as expected for plain ResNet official repro
+  features. Real smoke on cached patch-norm DINOv2 limit384 component features
+  found four groups (`cls`, `foreground`, `background`,
+  `foreground_minus_background`) and exported an adapted feature table under
+  `outputs/tmp/` after a short adapter run with train accuracy `1.0`.
+- Validation: focused component tests passed, adjacent regressions passed
+  (`tests/test_component_representation.py`, `tests/test_prepare_waterbirds_features.py`,
+  `tests/test_discovery.py`, `tests/test_data.py`), and the full local suite
+  passed at `183 passed`. No downstream WGA claim yet; next gate is official
+  DFR wiring on adapted component features, then no-limit seed-101 only if the
+  unchanged DFR head sees a real representation signal.
+- Ran the first unchanged-official-DFR wiring diagnostic on cached patch-norm
+  DINOv2 limit384 component features. Raw component features and the adapted
+  table both reached test accuracy `0.9296875` and test WGA `0.84375` with seed
+  `101` and five retrains. Adapted features slightly improved
+  nuisance-to-causal feature-importance ratio (`0.07565` to `0.07222`) and
+  causal probe accuracy (`0.94531` to `0.97656`), but nuisance probe accuracy
+  also rose (`0.84375` to `0.92969`) and selectivity fell (`0.10156` to
+  `0.046875`). Interpretation: the DFR path is wired, but the first adapter is
+  not a representation improvement. Do not escalate this exact adapter to
+  no-limit; next change should strengthen the objective against nuisance
+  recoverability or compare component subsets/residual concatenations.
+- Added component filtering and ordered component-name recovery for older
+  generic-column artifacts, plus an optional adversarial environment head in
+  the component adapter. Focused tests now cover filtering, ordered recovery,
+  artifact writing, and adapter reports; full suite passed at `185 passed`.
+- Ran several cheap unchanged-DFR component attempts on cached patch-norm DINOv2
+  limit384 features. `cls + foreground_minus_background` was the clear winner:
+  test WGA `0.90625`, test accuracy `0.953125`, selectivity `0.15625`, versus
+  raw-all WGA `0.84375` and selectivity `0.1015625`. `cls` alone tied WGA at
+  `0.84375` while improving selectivity; `cls + background` and
+  `cls + foreground` regressed to WGA `0.8125`; the stronger adversarial
+  adapter still tied raw WGA and did not hide environment signal.
+- Recovered component groups from the cached no-limit DINO patch
+  center/background artifact using explicit ordered names (`cls`, `center`,
+  `background`, `center_minus_background`). The analogous
+  `cls + center_minus_background` subset improved the raw cached patch table
+  under the same seed-101 five-retrain official DFR gate: WGA `0.9190031290`
+  versus raw `0.9143302441`, with lower nuisance probe accuracy (`0.9038660526`
+  versus `0.9185364246`). This is a real local improvement over the failed
+  patch-component baseline but still below the official comparator, so keep it
+  as the next Track B lead rather than a promotion candidate.
+- Ran the paired cached-component subset sweep across limit384 recipes with
+  unchanged official DFR, seed `101`, five retrains. The patch token-norm
+  `cls + foreground_minus_background` result reproduced WGA `0.90625`, test
+  accuracy `0.953125`, and selectivity `0.1328125`. The same subset hypothesis
+  did not transfer: patch CLS-sim raw and `cls + foreground_minus_background`
+  both reached only WGA `0.875`, patch CLS-only reached WGA `0.84375`, generic
+  patch center/background raw reached WGA `0.875`, generic
+  `cls + center_minus_background` reached WGA `0.84375`, and DINOv2
+  decomp-center/background `cls + center_minus_background` also reached WGA
+  `0.84375`. Interpretation: component subset selection is still the best Track
+  B lead, but the current win is specific to patch token-norm components rather
+  than a general `cls + diff` rule.
+- Strengthened the patch token-norm lead before spending on full extraction:
+  the limit384 `cls + foreground_minus_background` subset reproduced WGA
+  `0.90625` under 50 official DFR retrains, with selectivity improving to
+  `0.171875`. Then extracted the no-limit seed-101 patch token-norm component
+  table and evaluated the same subset with the unchanged 20-retrain official
+  DFR setting. Raw all-components reached test WGA `0.9127725959`, test accuracy
+  `0.9361408353`, selectivity `-0.0131170154`, and nuisance-to-causal
+  importance `0.3729524612`; `cls + foreground_minus_background` reached WGA
+  `0.9158878326`, test accuracy `0.9354504943`, selectivity `0.0031066537`,
+  and nuisance-to-causal importance `0.4943503439`. This is a small no-limit
+  improvement over raw patch token-norm but below both the cached
+  center/background subset result and the official comparator, so do not
+  promote. The evidence points toward learning/searching better patch-token
+  scoring rules rather than manually fixing on this subset.
+
 ## 2026-05-02: Bridge Candidate Manifest and Support Audit
 
 - Added `scripts/report_waterbirds_bridge_candidate.py`, which builds a
@@ -29,6 +190,93 @@ signals. Keep this focused on what was tried and what was learned.
   runner: `tests/test_report_waterbirds_bridge_candidate.py`,
   `tests/test_report_waterbirds_bridge_support.py`, and
   `tests/test_run_waterbirds_bridge_fused_sweep.py`.
+
+## 2026-05-03: Bridge-Fused Critical Audit
+
+- Refreshed the checksum-backed incumbent reports and wrote
+  `outputs/dfr_sweeps/bridge-fused-critical-audit.md`/JSON from the existing
+  five-seed random-control artifact. Verdict: keep
+  `bridge_fused_w0p3_top512` as the active Waterbirds candidate; do not promote
+  the later active-boundary/env-guard/replacement variants.
+- Incumbent five-seed gate remains positive: mean candidate WGA
+  `0.9367601395`, min WGA `0.9361370802`, mean delta to official DFR
+  `+0.0062305570`, mean delta to stats `+0.0031152844`, and mean delta to the
+  seed-wise best deterministic random control `+0.0021807075`. Best-random
+  deltas are non-negative on `5/5` seeds.
+- The critical caveat is margin size, not direction. Seed `104` is the weak and
+  most informative seed: the incumbent only ties the best random control there,
+  while the later env-guard promotion screen fails a stats/best-random seed and
+  trails the incumbent on mean. Treat env-guard as a guardrail/diagnostic, not a
+  replacement.
+- Support composition still argues against a random-score artifact:
+  `bridge_fused_w0p3` overlaps stats on `311/512` features and selects only `5`
+  env-dominant features, while deterministic random controls overlap stats far
+  less and select about `91`-`93` env-dominant features. The promotion-aware
+  replacement acceptor recommends no edits, so stop local support tinkering
+  unless a future candidate clears a full five-seed calibrated gate.
+
+## 2026-05-03: Calibrated Micro-Replacement Moonshot
+
+- Added an opt-in `calibrated_micro_replacement` support variant to
+  `scripts/run_waterbirds_bridge_fused_sweep.py`. It builds the env-guard
+  active-boundary challenger, enumerates one/two-feature micro-edits around the
+  incumbent support, scores those edits with the promotion-aware downstream
+  calibration table, and emits the best calibrated support set. Focused bridge
+  and replacement tests passed: `13 passed` across
+  `tests/test_run_waterbirds_bridge_fused_sweep.py`,
+  `tests/test_train_waterbirds_replacement_acceptor.py`, and
+  `tests/test_build_waterbirds_replacement_calibration.py`.
+- Compact screen on seeds `101`/`102`, top-512, five retrains selected one
+  replacement (`feature_1813_for_feature_213`) with calibrated conservative
+  score `0.000678`. It slightly beat the compact incumbent: mean WGA
+  `0.9354743063` versus `0.9352525771`, mean delta to stats `+0.0014440119`,
+  and mean delta to best random `+0.0011086464`, with non-negative stats and
+  best-random gates on `2/2` seeds.
+- The targeted weak-seed gate killed the candidate. On seed `104` with 50
+  retrains, the incumbent reached WGA `0.9361370802` and tied best random, while
+  `calibrated_micro_replacement` dropped to `0.9312638640`, with delta to stats
+  `-0.0033155680` and delta to best random `-0.0048732162`. Do not run a full
+  five-seed promotion. The learned/micro-edit moonshot repeated the same failure
+  mode as env-guard: compact positives do not survive the weak seed.
+
+## 2026-05-03: Bridge Score-Weighted DFR Consumer Moonshot
+
+- Added an opt-in official DFR consumer hook,
+  `official_dfr_score_weight_strength`, that converts
+  `causal_feature_scores` into validation-example sample weights for official
+  DFR tuning and retraining. Disabled weighting is the default. The sklearn
+  fallback logistic regression now accepts `sample_weight`, and focused
+  regression tests passed with the existing official DFR identity/matching
+  tests.
+- Compact screen, seeds `101`/`102`, top-512, five retrains, bridge-fused
+  scores as the score source: high-activation weighting (`strength=0.75`) was a
+  clear miss, with mean candidate WGA `0.9244548380`, mean delta to official
+  DFR `-0.0082450807`, and mean delta to best random `-0.0081314445`.
+- The inverse/low-activation variant was directionally less bad but still not
+  promotable: mean candidate WGA `0.9343656600`, mean delta to official DFR
+  `+0.0016657412`, mean delta to stats `+0.0003353655`, but mean delta to best
+  random `-0.0002241433` and compact mean below the unweighted incumbent compact
+  mean (`0.9352525771`). Stop this branch unless a future weighting objective is
+  grounded in a stronger validation-loss or group-specific theory.
+
+## 2026-05-03: DFR Hyperparameter-Ensemble Consumer Moonshot
+
+- Added an opt-in official DFR consumer hook,
+  `official_dfr_hyperparam_ensemble_top_k`, which averages final retrain heads
+  over the top validation-selected C/feature-scale candidates. Default `1`
+  preserves the original single-hyperparameter official DFR behavior, including
+  validation tie order. Focused official DFR tests passed.
+- Compact screen, seeds `101`/`102`, top-512, five retrains, bridge-fused
+  scores as the source: top-3 ensembling improved against official DFR and stats
+  but failed the best-random gate. Candidate mean WGA was `0.9350308478`, mean
+  delta to official DFR `+0.0023309290`, mean delta to stats `+0.0017793775`,
+  but mean delta to best random `-0.0013327897`.
+- Top-2 ensembling repeated the failure mode: candidate mean WGA
+  `0.9348091185`, mean delta to official DFR `+0.0021091998`, mean delta to
+  stats `+0.0020011067`, but mean delta to best random `-0.0017762482`, with
+  non-negative best-random seeds `0/2`. This is a consumer-robustness
+  diagnostic, not a promotion path. Do not run seed104/full promotion for this
+  branch.
 
 ## 2026-05-02: Bridge Support-Composition Iteration
 

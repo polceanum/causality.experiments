@@ -13,7 +13,7 @@ import urllib.request
 import numpy as np
 import pandas as pd
 import torch
-from PIL import Image
+from PIL import Image, ImageFilter
 from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 import yaml
 
@@ -34,7 +34,7 @@ ERM_SAMPLE_MODES = {
     "conflict_upweight",
     "group_balanced_conflict_upweight",
 }
-FEATURE_DECOMPOSITION_MODES = {"none", "center_background"}
+FEATURE_DECOMPOSITION_MODES = {"none", "center_background", "object_proxy"}
 
 
 @dataclass
@@ -107,6 +107,10 @@ def _canonical_feature_decomposition(feature_decomposition: str | None) -> str:
         "": "none",
         "center_bg": "center_background",
         "center_background_corners": "center_background",
+        "foreground_background": "object_proxy",
+        "object": "object_proxy",
+        "object_foreground_background": "object_proxy",
+        "segmentation_proxy": "object_proxy",
     }
     mode = aliases.get(mode, mode)
     if mode not in FEATURE_DECOMPOSITION_MODES:
@@ -138,10 +142,76 @@ def _waterbirds_decomposition_views(image: Image.Image, feature_decomposition: s
     mode = _canonical_feature_decomposition(feature_decomposition)
     if mode == "none":
         return [image]
+    if mode == "object_proxy":
+        foreground, background = _object_proxy_views(image)
+        return [image, foreground, background]
     width, height = image.size
     center = image.crop(_center_crop_box(width, height, 0.65))
     corners = [image.crop(box) for box in _corner_crop_boxes(width, height, 0.45)]
     return [image, center, *corners]
+
+
+def _standardize_image_score(values: np.ndarray) -> np.ndarray:
+    std = float(values.std())
+    if std <= 1e-8:
+        return np.zeros_like(values, dtype=np.float32)
+    return ((values - float(values.mean())) / std).astype(np.float32)
+
+
+def _object_proxy_mask(image: Image.Image) -> Image.Image:
+    rgb = image.convert("RGB")
+    arr = np.asarray(rgb, dtype=np.float32) / 255.0
+    height, width = arr.shape[:2]
+    border = max(2, min(width, height) // 12)
+    border_mask = np.zeros((height, width), dtype=bool)
+    border_mask[:border, :] = True
+    border_mask[-border:, :] = True
+    border_mask[:, :border] = True
+    border_mask[:, -border:] = True
+    background_mean = arr[border_mask].mean(axis=0)
+    color_distance = np.linalg.norm(arr - background_mean[None, None, :], axis=2)
+    yy, xx = np.mgrid[0:height, 0:width].astype(np.float32)
+    center_x = (width - 1) / 2.0
+    center_y = (height - 1) / 2.0
+    radius = np.sqrt(((xx - center_x) / max(center_x, 1.0)) ** 2 + ((yy - center_y) / max(center_y, 1.0)) ** 2)
+    center_prior = np.clip(1.0 - radius, 0.0, 1.0)
+    luminance = arr.mean(axis=2)
+    grad_y, grad_x = np.gradient(luminance)
+    edge_score = np.sqrt(grad_x**2 + grad_y**2)
+    score = (
+        0.55 * _standardize_image_score(color_distance)
+        + 0.35 * _standardize_image_score(center_prior)
+        + 0.10 * _standardize_image_score(edge_score)
+    )
+    threshold = float(np.percentile(score, 72.0))
+    mask = score >= threshold
+    if int(mask.sum()) < max(16, int(mask.size * 0.05)):
+        mask = center_prior >= 0.35
+    mask_image = Image.fromarray((mask.astype(np.uint8) * 255), mode="L")
+    mask_image = mask_image.filter(ImageFilter.MedianFilter(size=5)).filter(ImageFilter.GaussianBlur(radius=1.5))
+    return mask_image.point(lambda value: 255 if value >= 96 else 0)
+
+
+def _object_proxy_views(image: Image.Image) -> tuple[Image.Image, Image.Image]:
+    rgb = image.convert("RGB")
+    mask = _object_proxy_mask(rgb)
+    arr = np.asarray(rgb, dtype=np.float32)
+    width, height = rgb.size
+    border = max(2, min(width, height) // 12)
+    border_pixels = np.concatenate(
+        [
+            arr[:border, :, :].reshape(-1, 3),
+            arr[-border:, :, :].reshape(-1, 3),
+            arr[:, :border, :].reshape(-1, 3),
+            arr[:, -border:, :].reshape(-1, 3),
+        ],
+        axis=0,
+    )
+    fill = tuple(int(round(value)) for value in border_pixels.mean(axis=0).clip(0, 255))
+    fill_image = Image.new("RGB", rgb.size, fill)
+    foreground = Image.composite(rgb, fill_image, mask)
+    background = Image.composite(fill_image, rgb, mask)
+    return foreground, background
 
 
 def _compose_decomposed_view_features(view_features: torch.Tensor, feature_decomposition: str) -> torch.Tensor:
@@ -168,6 +238,8 @@ def _feature_decomposition_tag(feature_decomposition: str) -> str:
         return ""
     if mode == "center_background":
         return "_decompcenterbg"
+    if mode == "object_proxy":
+        return "_decompobjectproxy"
     return f"_decomp{mode}"
 
 
@@ -309,6 +381,32 @@ def _masked_patch_mean(patches: torch.Tensor, mask: torch.Tensor) -> torch.Tenso
     return (patches * weights).sum(dim=1) / denominator
 
 
+def _standardize_patch_scores(scores: torch.Tensor) -> torch.Tensor:
+    scores = scores.float()
+    return (scores - scores.mean(dim=1, keepdim=True)) / scores.std(dim=1, unbiased=False, keepdim=True).clamp_min(1e-6)
+
+
+def _center_patch_prior(batch_size: int, patch_count: int, *, device: torch.device) -> torch.Tensor:
+    grid_size = int(math.sqrt(patch_count))
+    if grid_size * grid_size != patch_count:
+        return torch.zeros((batch_size, patch_count), dtype=torch.float32, device=device)
+    coords = torch.arange(grid_size, device=device, dtype=torch.float32)
+    row = coords[:, None].expand(grid_size, grid_size)
+    col = coords[None, :].expand(grid_size, grid_size)
+    center = (grid_size - 1) / 2.0
+    distance = torch.sqrt((row - center).square() + (col - center).square())
+    prior = 1.0 - distance / distance.max().clamp_min(1e-6)
+    return prior.reshape(1, patch_count).expand(batch_size, patch_count)
+
+
+def _patch_components_from_scores(patches: torch.Tensor, scores: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    patch_count = int(patches.shape[1])
+    count = max(1, patch_count // 4)
+    foreground_mask = _topk_patch_mask(scores, count=count, largest=True)
+    background_mask = _topk_patch_mask(scores, count=count, largest=False)
+    return _masked_patch_mean(patches, foreground_mask), _masked_patch_mean(patches, background_mask)
+
+
 def _hf_patch_component_features(hidden: torch.Tensor, *, pooling: str = "center_background") -> torch.Tensor:
     if hidden.ndim != 3 or hidden.shape[1] < 2:
         raise ValueError("Patch component pooling requires a sequence of CLS plus patch tokens.")
@@ -335,20 +433,28 @@ def _hf_patch_component_features(hidden: torch.Tensor, *, pooling: str = "center
         background_features = grid[:, background_mask, :].mean(dim=1)
     elif pooling_key in {"cls_similarity", "patch_cls_similarity", "patch_cls_components"}:
         scores = torch.nn.functional.cosine_similarity(patches.float(), cls_features[:, None, :].float(), dim=2)
-        count = max(1, patch_count // 4)
-        foreground_mask = _topk_patch_mask(scores, count=count, largest=True)
-        background_mask = _topk_patch_mask(scores, count=count, largest=False)
-        center_features = _masked_patch_mean(patches, foreground_mask)
-        background_features = _masked_patch_mean(patches, background_mask)
+        center_features, background_features = _patch_components_from_scores(patches, scores)
     elif pooling_key in {"token_norm", "patch_token_norm", "patch_norm_components"}:
         scores = torch.linalg.vector_norm(patches.float(), dim=2)
-        count = max(1, patch_count // 4)
-        foreground_mask = _topk_patch_mask(scores, count=count, largest=True)
-        background_mask = _topk_patch_mask(scores, count=count, largest=False)
-        center_features = _masked_patch_mean(patches, foreground_mask)
-        background_features = _masked_patch_mean(patches, background_mask)
+        center_features, background_features = _patch_components_from_scores(patches, scores)
+    elif pooling_key in {"cls_norm", "patch_cls_norm", "patch_cls_norm_components"}:
+        cls_scores = torch.nn.functional.cosine_similarity(patches.float(), cls_features[:, None, :].float(), dim=2)
+        norm_scores = torch.linalg.vector_norm(patches.float(), dim=2)
+        scores = _standardize_patch_scores(cls_scores) + _standardize_patch_scores(norm_scores)
+        center_features, background_features = _patch_components_from_scores(patches, scores)
+    elif pooling_key in {"residual_norm", "patch_residual_norm", "patch_residual_norm_components"}:
+        scores = torch.linalg.vector_norm(patches.float() - cls_features[:, None, :].float(), dim=2)
+        center_features, background_features = _patch_components_from_scores(patches, scores)
+    elif pooling_key in {"center_norm", "patch_center_norm", "patch_center_norm_components"}:
+        norm_scores = torch.linalg.vector_norm(patches.float(), dim=2)
+        center_prior = _center_patch_prior(patches.shape[0], patch_count, device=patches.device)
+        scores = _standardize_patch_scores(norm_scores) + _standardize_patch_scores(center_prior)
+        center_features, background_features = _patch_components_from_scores(patches, scores)
     else:
-        raise ValueError("Patch component pooling must be one of: center_background, cls_similarity, token_norm.")
+        raise ValueError(
+            "Patch component pooling must be one of: center_background, cls_similarity, token_norm, "
+            "cls_norm, residual_norm, center_norm."
+        )
     return torch.cat(
         [
             cls_features,
@@ -411,12 +517,21 @@ def build_frozen_hf_vision_backbone(
         "patch_cls_components": ("cls_similarity", "patch_cls_similarity"),
         "patch_token_norm": ("token_norm", "patch_token_norm"),
         "patch_norm_components": ("token_norm", "patch_token_norm"),
+        "patch_cls_norm": ("cls_norm", "patch_cls_norm"),
+        "patch_cls_norm_components": ("cls_norm", "patch_cls_norm"),
+        "patch_residual_norm": ("residual_norm", "patch_residual_norm"),
+        "patch_residual_norm_components": ("residual_norm", "patch_residual_norm"),
+        "patch_center_norm": ("center_norm", "patch_center_norm"),
+        "patch_center_norm_components": ("center_norm", "patch_center_norm"),
     }
     if pooling_key in pooling_aliases:
         resolved_pooling, name_suffix = pooling_aliases[pooling_key]
         return FrozenHuggingFacePatchComponentBackbone(model, pooling=resolved_pooling), transform, f"hf_{safe_model_id}_{name_suffix}"
     if pooling_key != "cls":
-        raise ValueError("Hugging Face vision pooling must be one of: cls, patch_center_background, patch_cls_similarity, patch_token_norm.")
+        raise ValueError(
+            "Hugging Face vision pooling must be one of: cls, patch_center_background, patch_cls_similarity, "
+            "patch_token_norm, patch_cls_norm, patch_residual_norm, patch_center_norm."
+        )
     return FrozenHuggingFaceVisionBackbone(model), transform, f"hf_{safe_model_id}_vision"
 
 
@@ -555,8 +670,10 @@ def _feature_columns_for_components(feature_dim: int, component_names: list[str]
 
 def _feature_component_names(*, resolved_settings: dict[str, Any], extractor_name: str) -> list[str]:
     feature_decomposition = _canonical_feature_decomposition(str(resolved_settings.get("feature_decomposition", "none")))
-    if feature_decomposition != "none":
+    if feature_decomposition == "center_background":
         return ["full", "center", "background", "center_minus_background"]
+    if feature_decomposition == "object_proxy":
+        return ["full", "foreground", "background", "foreground_minus_background"]
     backbone_name = str(resolved_settings.get("backbone_name", "")).strip().lower()
     extractor_key = extractor_name.strip().lower()
     if backbone_name in {"hf_patch_components", "hf_patch"} or "patch_center_background" in extractor_key:
@@ -564,6 +681,15 @@ def _feature_component_names(*, resolved_settings: dict[str, Any], extractor_nam
     if backbone_name in {"hf_patch_cls_components", "hf_patch_cls"} or "patch_cls_similarity" in extractor_key:
         return ["cls", "foreground", "background", "foreground_minus_background"]
     if backbone_name in {"hf_patch_norm_components", "hf_patch_norm"} or "patch_token_norm" in extractor_key:
+        return ["cls", "foreground", "background", "foreground_minus_background"]
+    if backbone_name in {
+        "hf_patch_cls_norm_components",
+        "hf_patch_cls_norm",
+        "hf_patch_residual_norm_components",
+        "hf_patch_residual_norm",
+        "hf_patch_center_norm_components",
+        "hf_patch_center_norm",
+    } or any(key in extractor_key for key in ("patch_cls_norm", "patch_residual_norm", "patch_center_norm")):
         return ["cls", "foreground", "background", "foreground_minus_background"]
     return ["global"]
 
@@ -1304,6 +1430,12 @@ def extract_protocol_feature_matrix(
         "hf_patch_cls",
         "hf_patch_norm_components",
         "hf_patch_norm",
+        "hf_patch_cls_norm_components",
+        "hf_patch_cls_norm",
+        "hf_patch_residual_norm_components",
+        "hf_patch_residual_norm",
+        "hf_patch_center_norm_components",
+        "hf_patch_center_norm",
     }:
         if backbone_key in {"hf_patch_components", "hf_patch"}:
             hf_pooling = "patch_center_background"
@@ -1311,6 +1443,12 @@ def extract_protocol_feature_matrix(
             hf_pooling = "patch_cls_similarity"
         elif backbone_key in {"hf_patch_norm_components", "hf_patch_norm"}:
             hf_pooling = "patch_token_norm"
+        elif backbone_key in {"hf_patch_cls_norm_components", "hf_patch_cls_norm"}:
+            hf_pooling = "patch_cls_norm"
+        elif backbone_key in {"hf_patch_residual_norm_components", "hf_patch_residual_norm"}:
+            hf_pooling = "patch_residual_norm"
+        elif backbone_key in {"hf_patch_center_norm_components", "hf_patch_center_norm"}:
+            hf_pooling = "patch_center_norm"
         else:
             hf_pooling = "cls"
         model, transform, model_name = build_frozen_hf_vision_backbone(

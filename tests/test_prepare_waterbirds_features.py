@@ -15,6 +15,7 @@ from scripts.prepare_waterbirds_features import (
     _feature_component_names,
     _hf_patch_component_features,
     _hf_patch_center_background_features,
+    _object_proxy_views,
     _load_prepared_artifact,
     _store_prepared_artifact,
     _set_trainable_layers,
@@ -85,8 +86,16 @@ def test_feature_component_names_reflect_patch_pooling_modes() -> None:
         extractor_name="resnet_decompcenterbg",
     ) == ["full", "center", "background", "center_minus_background"]
     assert _feature_component_names(
+        resolved_settings={"feature_decomposition": "object_proxy", "backbone_name": "resnet50"},
+        extractor_name="resnet_decompobjectproxy",
+    ) == ["full", "foreground", "background", "foreground_minus_background"]
+    assert _feature_component_names(
         resolved_settings={"feature_decomposition": "none", "backbone_name": "hf_patch_cls_components"},
         extractor_name="hf_patch_cls_similarity_penultimate",
+    ) == ["cls", "foreground", "background", "foreground_minus_background"]
+    assert _feature_component_names(
+        resolved_settings={"feature_decomposition": "none", "backbone_name": "hf_patch_center_norm_components"},
+        extractor_name="hf_patch_center_norm_penultimate",
     ) == ["cls", "foreground", "background", "foreground_minus_background"]
 
 
@@ -247,6 +256,51 @@ def test_extract_feature_matrix_center_background_decomposition(tmp_path: Path) 
     assert features[0, 3].item() == 0.0
 
 
+def test_object_proxy_views_separate_center_object_from_border() -> None:
+    image = Image.new("RGB", (32, 32), color=(0, 80, 180))
+    for x in range(10, 22):
+        for y in range(10, 22):
+            image.putpixel((x, y), (220, 40, 20))
+
+    foreground, background = _object_proxy_views(image)
+
+    assert foreground.getpixel((16, 16))[0] > foreground.getpixel((1, 1))[0]
+    assert background.getpixel((16, 16))[2] > background.getpixel((16, 16))[0]
+    assert background.getpixel((1, 1)) == image.getpixel((1, 1))
+
+
+def test_extract_feature_matrix_object_proxy_decomposition(tmp_path: Path) -> None:
+    Image.new("RGB", (16, 16), color=(10, 20, 30)).save(tmp_path / "uniform.jpg")
+    metadata = pd.DataFrame(
+        {
+            "split": ["test"],
+            "y": [1],
+            "place": [0],
+            "group": [1],
+            "img_filename": ["uniform.jpg"],
+        }
+    )
+
+    class MeanPixelModel(torch.nn.Module):
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            return x.reshape(x.shape[0], -1).mean(dim=1, keepdim=True)
+
+    def transform(image: Image.Image) -> torch.Tensor:
+        return torch.tensor([[[image.getpixel((0, 0))[0] / 255.0]]], dtype=torch.float32)
+
+    features = extract_feature_matrix_from_model(
+        MeanPixelModel(),
+        tmp_path,
+        metadata,
+        transform,
+        device=torch.device("cpu"),
+        batch_size=1,
+        feature_decomposition="object_proxy",
+    )
+
+    assert features.shape == (1, 4)
+
+
 def test_hf_patch_center_background_features_pool_square_grid() -> None:
     cls = torch.tensor([[[100.0, 101.0]]])
     patches = torch.arange(16 * 2, dtype=torch.float32).reshape(1, 16, 2)
@@ -307,6 +361,27 @@ def test_hf_patch_component_features_can_pool_by_token_norm() -> None:
     assert features.shape == (1, 8)
     assert torch.equal(features[:, 2:4], torch.tensor([[3.0, 0.0]]))
     assert torch.equal(features[:, 4:6], torch.tensor([[0.0, 0.2]]))
+
+
+def test_hf_patch_component_features_can_pool_by_new_selector_recipes() -> None:
+    hidden = torch.tensor(
+        [
+            [
+                [1.0, 0.0],
+                [4.0, 0.0],
+                [0.0, 3.0],
+                [-1.0, 0.0],
+                [0.0, 0.1],
+            ]
+        ],
+        dtype=torch.float32,
+    )
+
+    for pooling in ("cls_norm", "residual_norm", "center_norm"):
+        features = _hf_patch_component_features(hidden, pooling=pooling)
+        assert features.shape == (1, 8)
+        assert torch.equal(features[:, :2], torch.tensor([[1.0, 0.0]]))
+        assert torch.equal(features[:, 6:], features[:, 2:4] - features[:, 4:6])
 
 
 def test_stratified_metadata_limit_keeps_split_group_coverage() -> None:
@@ -528,6 +603,54 @@ def test_protocol_feature_matrix_can_use_huggingface_cls_patch_pooling(monkeypat
     assert features.shape == (1, 4)
     assert extractor_name == "hf_fake_patch_cls_similarity_penultimate"
     assert resolved_settings["backbone_name"] == "hf_patch_cls_components"
+
+
+def test_protocol_feature_matrix_can_use_huggingface_center_norm_patch_pooling(monkeypatch, tmp_path: Path) -> None:
+    seen: dict[str, object] = {}
+
+    class TinyHFBackbone(torch.nn.Module):
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            return torch.ones((x.shape[0], 4), dtype=torch.float32)
+
+    def fake_build_frozen_hf_vision_backbone(*, model_id: str, local_files_only: bool = False, pooling: str = "cls"):
+        seen["pooling"] = pooling
+        return TinyHFBackbone(), (lambda image: torch.zeros(3, 2, 2)), "hf_fake_patch_center_norm"
+
+    monkeypatch.setattr(prepare_waterbirds_features, "build_frozen_hf_vision_backbone", fake_build_frozen_hf_vision_backbone)
+    metadata = pd.DataFrame(
+        {
+            "split": ["train"],
+            "y": [0],
+            "place": [0],
+            "group": [0],
+            "img_filename": ["a.jpg"],
+            "place_filename": ["p.jpg"],
+        }
+    )
+    Image.new("RGB", (4, 4), color=(128, 128, 128)).save(tmp_path / "a.jpg")
+
+    features, extractor_name, _, resolved_settings = prepare_waterbirds_features.extract_protocol_feature_matrix(
+        tmp_path,
+        metadata,
+        device=torch.device("cpu"),
+        batch_size=1,
+        erm_finetune_epochs=0,
+        erm_finetune_lr=0.001,
+        erm_finetune_weight_decay=0.001,
+        erm_finetune_mode="all",
+        erm_finetune_optimizer="sgd",
+        erm_finetune_momentum=0.9,
+        erm_finetune_augment=True,
+        erm_finetune_balance_groups=False,
+        weights_variant="facebook/dinov2-small",
+        eval_transform_style="local",
+        backbone_name="hf_patch_center_norm_components",
+    )
+
+    assert seen["pooling"] == "patch_center_norm"
+    assert features.shape == (1, 4)
+    assert extractor_name == "hf_fake_patch_center_norm_penultimate"
+    assert resolved_settings["backbone_name"] == "hf_patch_center_norm_components"
 
 
 def test_evaluate_waterbirds_model_records_group_and_prediction_counts(tmp_path: Path) -> None:
